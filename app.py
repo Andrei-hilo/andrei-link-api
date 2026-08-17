@@ -20,9 +20,9 @@ CODE_LENGTH = 6
 ALPHABET = string.ascii_letters + string.digits
 
 
-# --------------------------------------------------
+# =========================================================
 # DATABASE
-# --------------------------------------------------
+# =========================================================
 
 def get_db():
     if not DATABASE_URL:
@@ -55,9 +55,9 @@ def init_db():
         db.close()
 
 
-# --------------------------------------------------
+# =========================================================
 # HELPERS
-# --------------------------------------------------
+# =========================================================
 
 def valid_url(url):
     try:
@@ -92,28 +92,26 @@ def rate_limited(ip):
 
 
 def generate_code():
-    db = get_db()
+    while True:
+        code = "".join(
+            secrets.choice(ALPHABET)
+            for _ in range(CODE_LENGTH)
+        )
 
-    try:
-        while True:
-            code = "".join(
-                secrets.choice(ALPHABET)
-                for _ in range(CODE_LENGTH)
-            )
+        db = get_db()
 
+        try:
             with db.cursor() as cur:
                 cur.execute(
                     "SELECT 1 FROM links WHERE code = %s",
                     (code,)
                 )
 
-                exists = cur.fetchone()
+                if not cur.fetchone():
+                    return code
 
-            if not exists:
-                return code
-
-    finally:
-        db.close()
+        finally:
+            db.close()
 
 
 def get_link(code):
@@ -139,46 +137,40 @@ def get_link(code):
         db.close()
 
 
-# --------------------------------------------------
-# SOCIAL PREVIEW DETECTION
-# --------------------------------------------------
+def increment_click(code):
+    db = get_db()
 
-def is_preview_bot():
-    user_agent = request.headers.get("User-Agent", "").lower()
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE links
+                SET clicks = clicks + 1
+                WHERE code = %s
+                """,
+                (code,)
+            )
 
-    bots = [
-        "discordbot",
-        "twitterbot",
-        "facebookexternalhit",
-        "facebot",
-        "slackbot",
-        "linkedinbot",
-        "telegrambot",
-        "whatsapp",
-        "googlebot",
-        "bingbot",
-        "skypeuripreview",
-        "redditbot"
-    ]
+        db.commit()
 
-    return any(bot in user_agent for bot in bots)
+    finally:
+        db.close()
 
 
-# --------------------------------------------------
+# =========================================================
 # HOME
-# --------------------------------------------------
+# =========================================================
 
 @app.route("/")
 def home():
-
     return jsonify({
         "name": "Andrei URL Shortener API",
         "status": "online",
-        "version": "3.0",
+        "version": "3.1",
         "features": [
             "PostgreSQL storage",
             "Permanent short links",
-            "Social link previews",
+            "Open Graph previews",
             "Discord preview support"
         ],
         "endpoints": {
@@ -189,22 +181,21 @@ def home():
     })
 
 
-# --------------------------------------------------
+# =========================================================
 # LOGO
-# --------------------------------------------------
+# =========================================================
 
 @app.route("/logo.png")
 def logo():
-
     return send_from_directory(
         os.path.join(app.root_path, "static"),
         "logo.png"
     )
 
 
-# --------------------------------------------------
+# =========================================================
 # SHORTEN
-# --------------------------------------------------
+# =========================================================
 
 @app.route("/shorten")
 def shorten():
@@ -244,7 +235,6 @@ def shorten():
             cursor_factory=psycopg2.extras.RealDictCursor
         ) as cur:
 
-            # Reuse existing code for the same URL.
             cur.execute(
                 """
                 SELECT code
@@ -282,7 +272,6 @@ def shorten():
         db.close()
 
     base_url = request.host_url.rstrip("/")
-
     short_url = f"{base_url}/{code}"
 
     return jsonify({
@@ -293,9 +282,9 @@ def shorten():
     })
 
 
-# --------------------------------------------------
+# =========================================================
 # RESOLVE
-# --------------------------------------------------
+# =========================================================
 
 @app.route("/resolve")
 def resolve():
@@ -325,31 +314,30 @@ def resolve():
     })
 
 
-# --------------------------------------------------
-# SOCIAL PREVIEW PAGE
-# --------------------------------------------------
+# =========================================================
+# PREVIEW PAGE
+# =========================================================
 
-def preview_page(code, link):
+def preview_page(code, destination):
 
     base_url = request.host_url.rstrip("/")
 
     short_url = f"{base_url}/{code}"
     logo_url = f"{base_url}/logo.png"
 
-    destination = html.escape(link["url"])
-    escaped_short = html.escape(short_url)
+    safe_destination = html.escape(destination, quote=True)
+    safe_short_url = html.escape(short_url, quote=True)
 
-    page = f"""
-<!DOCTYPE html>
+    return f"""<!doctype html>
 <html lang="en">
 <head>
 
-<meta charset="UTF-8">
+<meta charset="utf-8">
 
 <title>Andrei URL Shortener</title>
 
 <meta name="viewport"
-      content="width=device-width, initial-scale=1">
+      content="width=device-width,initial-scale=1">
 
 <meta name="description"
       content="A shortened link from Andrei URL Shortener.">
@@ -363,10 +351,10 @@ def preview_page(code, link):
       content="Andrei URL Shortener">
 
 <meta property="og:description"
-      content="Shortened link • {destination}">
+      content="Click to visit the shortened link.">
 
 <meta property="og:url"
-      content="{escaped_short}">
+      content="{safe_short_url}">
 
 <meta property="og:image"
       content="{logo_url}">
@@ -377,114 +365,186 @@ def preview_page(code, link):
 <meta property="og:site_name"
       content="Andrei URL Shortener">
 
-<!-- Twitter -->
+<!-- Twitter / other preview systems -->
 
 <meta name="twitter:card"
-      content="summary_large_image">
+      content="summary">
 
 <meta name="twitter:title"
       content="Andrei URL Shortener">
 
 <meta name="twitter:description"
-      content="Shortened link • {destination}">
+      content="Click to visit the shortened link.">
 
 <meta name="twitter:image"
       content="{logo_url}">
 
+<style>
+
+* {{
+    box-sizing: border-box;
+}}
+
+body {{
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+
+    background: #080a10;
+    color: #f4f7ff;
+
+    font-family:
+        Inter,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        Arial,
+        sans-serif;
+}}
+
+.card {{
+    width: min(440px, 100%);
+
+    padding: 28px;
+
+    text-align: center;
+
+    background: #10131c;
+
+    border: 1px solid #252b3b;
+
+    border-radius: 24px;
+
+    box-shadow:
+        0 20px 70px rgba(0,0,0,.5);
+}}
+
+.logo {{
+    width: 110px;
+    height: 110px;
+
+    object-fit: cover;
+
+    border-radius: 22px;
+
+    margin-bottom: 16px;
+}}
+
+h1 {{
+    margin: 0 0 10px;
+    font-size: 27px;
+}}
+
+p {{
+    color: #8f98ad;
+    line-height: 1.5;
+}}
+
+.destination {{
+    margin-top: 16px;
+    padding: 13px;
+
+    border-radius: 12px;
+
+    background: #080b11;
+
+    color: #7c6cff;
+
+    word-break: break-word;
+
+    font-size: 13px;
+}}
+
+.button {{
+    display: inline-block;
+
+    margin-top: 18px;
+
+    padding: 12px 22px;
+
+    border-radius: 12px;
+
+    background: #7c6cff;
+
+    color: white;
+
+    text-decoration: none;
+
+    font-weight: 700;
+}}
+
+.small {{
+    margin-top: 16px;
+    font-size: 11px;
+    color: #687187;
+}}
+
+</style>
+
 </head>
 
-<body style="
-    margin:0;
-    background:#090b12;
-    color:white;
-    font-family:Arial,sans-serif;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-    min-height:100vh;
-">
+<body>
 
-<div style="
-    width:min(500px,90%);
-    background:#10131c;
-    border:1px solid #252b3b;
-    border-radius:22px;
-    padding:25px;
-    text-align:center;
-">
+<div class="card">
 
 <img
+    class="logo"
     src="{logo_url}"
     alt="Andrei URL Shortener"
-    style="
-        width:120px;
-        height:120px;
-        object-fit:cover;
-        border-radius:24px;
-    "
 >
 
 <h1>Andrei URL Shortener</h1>
 
-<p style="color:#9aa3b8;">
-    Redirecting you to:
+<p>
+    You're being redirected to:
 </p>
 
-<p style="
-    word-break:break-word;
-    color:#7c6cff;
-">
-    {destination}
-</p>
-
-<p style="color:#697286;font-size:13px;">
-    Short URL: {escaped_short}
-</p>
+<div class="destination">
+    {safe_destination}
+</div>
 
 <a
-    href="{destination}"
-    style="
-        display:inline-block;
-        margin-top:10px;
-        padding:12px 20px;
-        border-radius:12px;
-        background:#7c6cff;
-        color:white;
-        text-decoration:none;
-        font-weight:bold;
-    "
+    class="button"
+    href="{safe_destination}"
 >
     Continue
 </a>
+
+<div class="small">
+    Short link: {safe_short_url}
+</div>
 
 </div>
 
 <script>
 setTimeout(function() {{
-    window.location.href = {repr(link["url"])};
-}}, 300);
+    window.location.replace({destination!r});
+}}, 1200);
 </script>
 
 </body>
-</html>
-"""
-
-    return page
+</html>"""
 
 
-# --------------------------------------------------
-# REDIRECT
-# --------------------------------------------------
+# =========================================================
+# SHORT LINK
+# =========================================================
 
 @app.route("/<code>")
 def follow(code):
 
-    if code in (
+    reserved = {
         "shorten",
         "resolve",
         "favicon.ico",
         "logo.png"
-    ):
+    }
+
+    if code in reserved:
         return jsonify({
             "success": False,
             "error": "Not found"
@@ -498,40 +558,30 @@ def follow(code):
             "error": "Short link not found"
         }), 404
 
-    # Discord and other preview crawlers receive
-    # Open Graph metadata instead of an immediate redirect.
-    if is_preview_bot():
-        return preview_page(code, link)
+    # IMPORTANT:
+    #
+    # We intentionally return HTML for EVERY short-link request.
+    #
+    # This allows Discord and other preview crawlers to read
+    # the Open Graph metadata.
+    #
+    # Normal visitors are automatically redirected by the
+    # JavaScript on the page.
 
-    # Normal visitors get redirected.
-    db = get_db()
+    increment_click(code)
 
-    try:
-        with db.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE links
-                SET clicks = clicks + 1
-                WHERE code = %s
-                """,
-                (code,)
-            )
-
-        db.commit()
-
-    finally:
-        db.close()
-
-    return redirect(link["url"], code=302)
+    return preview_page(
+        code,
+        link["url"]
+    )
 
 
-# --------------------------------------------------
+# =========================================================
 # ERRORS
-# --------------------------------------------------
+# =========================================================
 
 @app.errorhandler(404)
 def not_found(error):
-
     return jsonify({
         "success": False,
         "error": "Endpoint not found"
@@ -540,24 +590,25 @@ def not_found(error):
 
 @app.errorhandler(500)
 def server_error(error):
-
     return jsonify({
         "success": False,
         "error": "Internal server error"
     }), 500
 
 
-# --------------------------------------------------
+# =========================================================
 # START
-# --------------------------------------------------
+# =========================================================
 
 init_db()
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(
+        os.environ.get("PORT", 5000)
+    )
 
     app.run(
         host="0.0.0.0",
         port=port
-        )
+)
