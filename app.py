@@ -1,45 +1,55 @@
 from flask import Flask, request, jsonify, redirect
 from urllib.parse import urlparse
-import sqlite3
 import secrets
 import string
 import time
 import os
+import psycopg
 
 app = Flask(__name__)
 
-DB_PATH = os.environ.get("DB_PATH", "links.db")
-
 RATE_LIMIT = 30
 RATE_WINDOW = 60
+
 requests_log = {}
 
 CODE_LENGTH = 6
 ALPHABET = string.ascii_letters + string.digits
 
 
+# -----------------------------
+# DATABASE
+# -----------------------------
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+
 def get_db():
-    db = sqlite3.connect(DB_PATH)
-    db.row_factory = sqlite3.Row
-    return db
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not configured")
+
+    return psycopg.connect(DATABASE_URL)
 
 
 def init_db():
-    db = get_db()
+    with get_db() as db:
+        with db.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS links (
+                    id BIGSERIAL PRIMARY KEY,
+                    code VARCHAR(20) UNIQUE NOT NULL,
+                    url TEXT NOT NULL,
+                    created_at BIGINT NOT NULL,
+                    clicks BIGINT NOT NULL DEFAULT 0
+                )
+            """)
 
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS links (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            code TEXT UNIQUE NOT NULL,
-            url TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            clicks INTEGER NOT NULL DEFAULT 0
-        )
-    """)
+        db.commit()
 
-    db.commit()
-    db.close()
 
+# -----------------------------
+# URL VALIDATION
+# -----------------------------
 
 def valid_url(url):
     try:
@@ -49,9 +59,14 @@ def valid_url(url):
             parsed.scheme in ("http", "https")
             and bool(parsed.netloc)
         )
+
     except Exception:
         return False
 
+
+# -----------------------------
+# RATE LIMITING
+# -----------------------------
 
 def rate_limited(ip):
     now = time.time()
@@ -68,34 +83,42 @@ def rate_limited(ip):
         return True
 
     requests_log[ip].append(now)
+
     return False
 
 
-def generate_code():
-    db = get_db()
+# -----------------------------
+# SHORT CODE GENERATOR
+# -----------------------------
 
+def generate_code():
     while True:
         code = "".join(
             secrets.choice(ALPHABET)
             for _ in range(CODE_LENGTH)
         )
 
-        exists = db.execute(
-            "SELECT 1 FROM links WHERE code = ?",
-            (code,)
-        ).fetchone()
+        with get_db() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM links WHERE code = %s",
+                    (code,)
+                )
 
-        if not exists:
-            db.close()
-            return code
+                if cur.fetchone() is None:
+                    return code
 
+
+# -----------------------------
+# HOME
+# -----------------------------
 
 @app.route("/")
 def home():
     return jsonify({
         "name": "Andrei URL Shortener API",
         "status": "online",
-        "version": "1.0",
+        "version": "2.0",
         "endpoints": {
             "shorten": "/shorten?url=https://example.com",
             "resolve": "/resolve?code=XXXXXX",
@@ -104,8 +127,13 @@ def home():
     })
 
 
+# -----------------------------
+# SHORTEN
+# -----------------------------
+
 @app.route("/shorten")
 def shorten():
+
     ip = request.remote_addr or "unknown"
 
     if rate_limited(ip):
@@ -134,33 +162,47 @@ def shorten():
             "error": "Invalid HTTP/HTTPS URL"
         }), 400
 
-    db = get_db()
+    with get_db() as db:
 
-    # Reuse an existing short code for the same URL.
-    existing = db.execute(
-        "SELECT code FROM links WHERE url = ? LIMIT 1",
-        (url,)
-    ).fetchone()
+        with db.cursor() as cur:
 
-    if existing:
-        code = existing["code"]
-    else:
-        code = generate_code()
+            # Reuse existing short link
+            cur.execute(
+                """
+                SELECT code
+                FROM links
+                WHERE url = %s
+                LIMIT 1
+                """,
+                (url,)
+            )
 
-        db.execute(
-            """
-            INSERT INTO links
-            (code, url, created_at, clicks)
-            VALUES (?, ?, ?, 0)
-            """,
-            (code, url, int(time.time()))
-        )
+            existing = cur.fetchone()
+
+            if existing:
+                code = existing[0]
+
+            else:
+
+                code = generate_code()
+
+                cur.execute(
+                    """
+                    INSERT INTO links
+                    (code, url, created_at, clicks)
+                    VALUES (%s, %s, %s, 0)
+                    """,
+                    (
+                        code,
+                        url,
+                        int(time.time())
+                    )
+                )
 
         db.commit()
 
-    db.close()
-
     base_url = request.host_url.rstrip("/")
+
     short_url = f"{base_url}/{code}"
 
     return jsonify({
@@ -171,8 +213,13 @@ def shorten():
     })
 
 
+# -----------------------------
+# RESOLVE
+# -----------------------------
+
 @app.route("/resolve")
 def resolve():
+
     code = request.args.get("code", "").strip()
 
     if not code:
@@ -181,64 +228,91 @@ def resolve():
             "error": "Missing ?code= parameter"
         }), 400
 
-    db = get_db()
+    with get_db() as db:
 
-    link = db.execute(
-        "SELECT code, url, created_at, clicks FROM links WHERE code = ?",
-        (code,)
-    ).fetchone()
+        with db.cursor() as cur:
 
-    db.close()
+            cur.execute(
+                """
+                SELECT code, url, created_at, clicks
+                FROM links
+                WHERE code = %s
+                """,
+                (code,)
+            )
 
-    if not link:
-        return jsonify({
-            "success": False,
-            "error": "Short code not found"
-        }), 404
-
-    return jsonify({
-        "success": True,
-        "code": link["code"],
-        "url": link["url"],
-        "created_at": link["created_at"],
-        "clicks": link["clicks"]
-    })
-
-
-@app.route("/<code>")
-def follow(code):
-    # Don't treat known API paths as short codes.
-    if code in ("shorten", "resolve", "favicon.ico"):
-        return jsonify({
-            "success": False,
-            "error": "Not found"
-        }), 404
-
-    db = get_db()
-
-    link = db.execute(
-        "SELECT url FROM links WHERE code = ?",
-        (code,)
-    ).fetchone()
+            link = cur.fetchone()
 
     if not link:
-        db.close()
-
         return jsonify({
             "success": False,
             "error": "Short link not found"
         }), 404
 
-    db.execute(
-        "UPDATE links SET clicks = clicks + 1 WHERE code = ?",
-        (code,)
-    )
+    return jsonify({
+        "success": True,
+        "code": link[0],
+        "url": link[1],
+        "created_at": link[2],
+        "clicks": link[3]
+    })
 
-    db.commit()
-    db.close()
 
-    return redirect(link["url"], code=302)
+# -----------------------------
+# REDIRECT
+# -----------------------------
 
+@app.route("/<code>")
+def follow(code):
+
+    if code in (
+        "shorten",
+        "resolve",
+        "favicon.ico"
+    ):
+        return jsonify({
+            "success": False,
+            "error": "Not found"
+        }), 404
+
+    with get_db() as db:
+
+        with db.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT url
+                FROM links
+                WHERE code = %s
+                """,
+                (code,)
+            )
+
+            link = cur.fetchone()
+
+            if not link:
+                return jsonify({
+                    "success": False,
+                    "error": "Short link not found"
+                }), 404
+
+            cur.execute(
+                """
+                UPDATE links
+                SET clicks = clicks + 1
+                WHERE code = %s
+                """,
+                (code,)
+            )
+
+        db.commit()
+
+    return redirect(link[0], code=302)
+
+
+# -----------------------------
+# ERRORS
+# -----------------------------
 
 @app.errorhandler(404)
 def not_found(error):
@@ -256,11 +330,18 @@ def server_error(error):
     }), 500
 
 
-init_db()
+# -----------------------------
+# STARTUP
+# -----------------------------
+
+try:
+    init_db()
+except Exception as e:
+    print("Database initialization failed:", e)
 
 
 if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=5000
-    )
+                )
