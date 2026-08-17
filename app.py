@@ -1,5 +1,5 @@
-from flask import Flask, request, jsonify, redirect, send_from_directory, Response
-from urllib.parse import urlparse, parse_qs
+from flask import Flask, request, jsonify, redirect, send_from_directory
+from urllib.parse import urlparse
 import psycopg2
 import psycopg2.extras
 import secrets
@@ -7,9 +7,6 @@ import string
 import time
 import os
 import html
-import json
-import urllib.request
-import urllib.error
 
 app = Flask(__name__)
 
@@ -112,11 +109,11 @@ def generate_code():
 
                 exists = cur.fetchone()
 
+                if not exists:
+                    return code
+
         finally:
             db.close()
-
-        if not exists:
-            return code
 
 
 def get_link(code):
@@ -162,156 +159,292 @@ def increment_click(code):
         db.close()
 
 
-def is_discord_bot():
-    ua = request.headers.get("User-Agent", "").lower()
-
-    bot_words = [
-        "discordbot",
-        "twitterbot",
-        "facebookexternalhit",
-        "slackbot",
-        "telegrambot",
-        "whatsapp",
-        "linkedinbot",
-        "embedly",
-        "crawler",
-        "bot"
-    ]
-
-    return any(word in ua for word in bot_words)
-
-
 # =========================================================
-# YOUTUBE HELPERS
-# =========================================================
-
-def youtube_video_id(url):
-    try:
-        parsed = urlparse(url)
-        host = parsed.netloc.lower()
-        path = parsed.path
-
-        if "youtu.be" in host:
-            return path.strip("/").split("/")[0]
-
-        if "youtube.com" in host:
-            query = parse_qs(parsed.query)
-
-            if "v" in query:
-                return query["v"][0]
-
-            if path.startswith("/shorts/"):
-                return path.split("/shorts/")[1].split("/")[0]
-
-            if path.startswith("/embed/"):
-                return path.split("/embed/")[1].split("/")[0]
-
-    except Exception:
-        pass
-
-    return None
-
-
-def get_youtube_info(url):
-    video_id = youtube_video_id(url)
-
-    if not video_id:
-        return None
-
-    thumbnail = (
-        f"https://i.ytimg.com/vi/"
-        f"{video_id}/hqdefault.jpg"
-    )
-
-    title = "YouTube Video"
-
-    # Try YouTube oEmbed for the actual title.
-    try:
-        api_url = (
-            "https://www.youtube.com/oembed"
-            "?url=" + urllib.request.quote(url, safe="")
-            + "&format=json"
-        )
-
-        req = urllib.request.Request(
-            api_url,
-            headers={
-                "User-Agent": "Mozilla/5.0"
-            }
-        )
-
-        with urllib.request.urlopen(
-            req,
-            timeout=5
-        ) as response:
-
-            data = json.loads(
-                response.read().decode("utf-8")
-            )
-
-            title = data.get(
-                "title",
-                title
-            )
-
-    except Exception:
-        pass
-
-    return {
-        "title": title,
-        "description": "Watch this YouTube video.",
-        "image": thumbnail,
-        "type": "video",
-        "site": "YouTube"
-    }
-
-
-# =========================================================
-# GENERIC PREVIEW INFORMATION
-# =========================================================
-
-def get_preview_info(destination):
-    parsed = urlparse(destination)
-
-    hostname = parsed.netloc.lower()
-
-    youtube = get_youtube_info(destination)
-
-    if youtube:
-        return youtube
-
-    return {
-        "title": f"Visit {hostname}",
-        "description": "Open this shortened link to visit the destination.",
-        "image": None,
-        "type": "website",
-        "site": hostname
-    }
-
-
-# =========================================================
-# HOME
+# HOMEPAGE
 # =========================================================
 
 @app.route("/")
 def home():
-    return jsonify({
-        "name": "Andrei URL Shortener API",
-        "status": "online",
-        "version": "4.0",
-        "features": [
-            "PostgreSQL storage",
-            "Permanent short links",
-            "Open Graph previews",
-            "Discord preview support",
-            "YouTube preview support"
-        ],
-        "endpoints": {
-            "shorten": "/shorten?url=https://example.com",
-            "resolve": "/resolve?code=XXXXXX",
-            "redirect": "/XXXXXX"
-        }
-    })
+
+    base_url = request.host_url.rstrip("/")
+    logo_url = f"{base_url}/logo.png"
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0">
+
+    <title>Andrei URL Shortener</title>
+
+    <meta name="description"
+          content="Fast and simple URL shortening by Andrei.">
+
+    <!-- Open Graph -->
+
+    <meta property="og:type"
+          content="website">
+
+    <meta property="og:title"
+          content="Andrei URL Shortener">
+
+    <meta property="og:description"
+          content="Fast and simple URL shortening.">
+
+    <meta property="og:url"
+          content="{base_url}/">
+
+    <meta property="og:image"
+          content="{logo_url}">
+
+    <meta property="og:image:alt"
+          content="Andrei URL Shortener">
+
+    <meta property="og:site_name"
+          content="Andrei URL Shortener">
+
+    <!-- Twitter -->
+
+    <meta name="twitter:card"
+          content="summary">
+
+    <meta name="twitter:title"
+          content="Andrei URL Shortener">
+
+    <meta name="twitter:description"
+          content="Fast and simple URL shortening.">
+
+    <meta name="twitter:image"
+          content="{logo_url}">
+
+    <style>
+
+        * {{
+            box-sizing: border-box;
+        }}
+
+        html {{
+            min-height: 100%;
+        }}
+
+        body {{
+            margin: 0;
+            min-height: 100vh;
+
+            display: flex;
+            align-items: center;
+            justify-content: center;
+
+            padding: 20px;
+
+            background:
+                radial-gradient(
+                    circle at top,
+                    #20283f 0%,
+                    #0b0d14 45%,
+                    #070910 100%
+                );
+
+            color: #ffffff;
+
+            font-family:
+                Inter,
+                system-ui,
+                -apple-system,
+                BlinkMacSystemFont,
+                "Segoe UI",
+                Arial,
+                sans-serif;
+        }}
+
+        .container {{
+            width: min(500px, 100%);
+
+            padding: 42px 28px;
+
+            text-align: center;
+
+            background: rgba(17, 20, 29, 0.94);
+
+            border: 1px solid #292f40;
+
+            border-radius: 28px;
+
+            box-shadow:
+                0 25px 80px rgba(0, 0, 0, 0.55);
+
+            backdrop-filter: blur(12px);
+        }}
+
+        .logo {{
+            width: 150px;
+            height: 150px;
+
+            display: block;
+
+            margin: 0 auto 24px;
+
+            object-fit: cover;
+
+            border-radius: 32px;
+
+            box-shadow:
+                0 12px 40px rgba(0, 0, 0, 0.45);
+        }}
+
+        h1 {{
+            margin: 0;
+
+            font-size: 32px;
+
+            font-weight: 800;
+
+            letter-spacing: -0.5px;
+        }}
+
+        .description {{
+            margin: 12px 0 24px;
+
+            color: #9aa3b8;
+
+            font-size: 16px;
+
+            line-height: 1.6;
+        }}
+
+        .status {{
+            display: inline-flex;
+
+            align-items: center;
+
+            gap: 8px;
+
+            padding: 9px 16px;
+
+            border-radius: 999px;
+
+            background: #15231b;
+
+            border: 1px solid #23402e;
+
+            color: #69dc91;
+
+            font-size: 14px;
+
+            font-weight: 600;
+        }}
+
+        .dot {{
+            width: 8px;
+            height: 8px;
+
+            border-radius: 50%;
+
+            background: #55d982;
+        }}
+
+        .api {{
+            margin-top: 28px;
+
+            padding: 16px;
+
+            text-align: left;
+
+            border-radius: 16px;
+
+            background: #0a0d14;
+
+            border: 1px solid #202635;
+        }}
+
+        .api-title {{
+            margin-bottom: 10px;
+
+            color: #ffffff;
+
+            font-weight: 700;
+        }}
+
+        .endpoint {{
+            margin: 7px 0;
+
+            color: #858fa5;
+
+            font-family: monospace;
+
+            font-size: 13px;
+
+            word-break: break-word;
+        }}
+
+        .brand {{
+            margin-top: 24px;
+
+            color: #596276;
+
+            font-size: 12px;
+        }}
+
+    </style>
+
+</head>
+
+<body>
+
+    <main class="container">
+
+        <img
+            class="logo"
+            src="{logo_url}"
+            alt="Andrei URL Shortener Logo"
+        >
+
+        <h1>
+            Andrei URL Shortener
+        </h1>
+
+        <p class="description">
+            Fast and simple URL shortening.
+        </p>
+
+        <div class="status">
+            <span class="dot"></span>
+            API Online
+        </div>
+
+        <div class="api">
+
+            <div class="api-title">
+                API Endpoints
+            </div>
+
+            <div class="endpoint">
+                /shorten?url=https://example.com
+            </div>
+
+            <div class="endpoint">
+                /resolve?code=XXXXXX
+            </div>
+
+            <div class="endpoint">
+                /XXXXXX
+            </div>
+
+        </div>
+
+        <div class="brand">
+            Andrei URL Shortener API
+        </div>
+
+    </main>
+
+</body>
+
+</html>"""
 
 
 # =========================================================
@@ -320,6 +453,7 @@ def home():
 
 @app.route("/logo.png")
 def logo():
+
     return send_from_directory(
         os.path.join(app.root_path, "static"),
         "logo.png"
@@ -448,26 +582,15 @@ def resolve():
 
 
 # =========================================================
-# PREVIEW PAGE
+# SHORT LINK PREVIEW
 # =========================================================
 
 def preview_page(code, destination):
 
     base_url = request.host_url.rstrip("/")
+
     short_url = f"{base_url}/{code}"
     logo_url = f"{base_url}/logo.png"
-
-    info = get_preview_info(destination)
-
-    title = html.escape(
-        info["title"],
-        quote=True
-    )
-
-    description = html.escape(
-        info["description"],
-        quote=True
-    )
 
     safe_destination = html.escape(
         destination,
@@ -479,97 +602,58 @@ def preview_page(code, destination):
         quote=True
     )
 
-    image = info.get("image")
-
-    image_tag = ""
-
-    if image:
-        image_tag = f"""
-<meta property="og:image"
-      content="{html.escape(image, quote=True)}">
-
-<meta property="og:image:secure_url"
-      content="{html.escape(image, quote=True)}">
-
-<meta property="og:image:alt"
-      content="{title}">
-"""
-
-    og_type = info.get(
-        "type",
-        "website"
-    )
-
-    site_name = html.escape(
-        info.get("site", "Andrei URL Shortener"),
-        quote=True
-    )
-
-    # Use HTML escaping for the JavaScript URL too.
-    js_destination = json.dumps(destination)
-
     return f"""<!doctype html>
+
 <html lang="en">
+
 <head>
 
 <meta charset="utf-8">
 
-<title>{title}</title>
-
 <meta name="viewport"
-      content="width=device-width,initial-scale=1">
+      content="width=device-width, initial-scale=1">
+
+<title>Andrei URL Shortener</title>
 
 <meta name="description"
-      content="{description}">
+      content="A shortened link from Andrei URL Shortener.">
 
-<!-- =====================================================
-     OPEN GRAPH
-     ===================================================== -->
+<!-- Open Graph -->
 
 <meta property="og:type"
-      content="{og_type}">
+      content="website">
 
 <meta property="og:title"
-      content="{title}">
+      content="Andrei URL Shortener">
 
 <meta property="og:description"
-      content="{description}">
+      content="Click to visit the shortened link.">
 
 <meta property="og:url"
       content="{safe_short_url}">
 
-<meta property="og:site_name"
-      content="{site_name}">
-
-{image_tag}
-
-<!-- Fallback image -->
-
 <meta property="og:image"
       content="{logo_url}">
 
-<!-- =====================================================
-     TWITTER
-     ===================================================== -->
+<meta property="og:image:alt"
+      content="Andrei URL Shortener">
+
+<meta property="og:site_name"
+      content="Andrei URL Shortener">
+
+<!-- Twitter -->
 
 <meta name="twitter:card"
-      content="summary_large_image">
+      content="summary">
 
 <meta name="twitter:title"
-      content="{title}">
+      content="Andrei URL Shortener">
 
 <meta name="twitter:description"
-      content="{description}">
+      content="Click to visit the shortened link.">
 
 <meta name="twitter:image"
-      content="{image or logo_url}">
-
-<!-- =====================================================
-     DISCORD / EMBED
-     ===================================================== -->
-
-<meta name="theme-color"
-      content="#7c6cff">
+      content="{logo_url}">
 
 <style>
 
@@ -579,15 +663,19 @@ def preview_page(code, destination):
 
 body {{
     margin: 0;
+
     min-height: 100vh;
 
     display: flex;
+
     align-items: center;
+
     justify-content: center;
 
     padding: 20px;
 
     background: #080a10;
+
     color: #f4f7ff;
 
     font-family:
@@ -601,7 +689,7 @@ body {{
 }}
 
 .card {{
-    width: min(460px, 100%);
+    width: min(440px, 100%);
 
     padding: 28px;
 
@@ -617,49 +705,39 @@ body {{
         0 20px 70px rgba(0,0,0,.5);
 }}
 
-.preview-image {{
-    width: 100%;
-    max-height: 240px;
-
-    object-fit: cover;
-
-    border-radius: 16px;
-
-    margin-bottom: 18px;
-
-    background: #080b11;
-}}
-
 .logo {{
-    width: 90px;
-    height: 90px;
+    width: 110px;
+    height: 110px;
 
     object-fit: cover;
 
-    border-radius: 20px;
+    border-radius: 22px;
 
     margin-bottom: 16px;
 }}
 
 h1 {{
     margin: 0 0 10px;
+
     font-size: 27px;
 }}
 
 p {{
     color: #8f98ad;
+
     line-height: 1.5;
 }}
 
 .destination {{
     margin-top: 16px;
+
     padding: 13px;
 
     border-radius: 12px;
 
     background: #080b11;
 
-    color: #7c6cff;
+    color: #9a91ff;
 
     word-break: break-word;
 
@@ -700,12 +778,18 @@ p {{
 
 <div class="card">
 
-{"<img class='preview-image' src='" + html.escape(image, quote=True) + "' alt='Preview'>" if image else f"<img class='logo' src='{logo_url}' alt='Andrei URL Shortener'>"}
+<img
+    class="logo"
+    src="{logo_url}"
+    alt="Andrei URL Shortener"
+>
 
-<h1>{title}</h1>
+<h1>
+    Andrei URL Shortener
+</h1>
 
 <p>
-    {description}
+    You're being redirected to:
 </p>
 
 <div class="destination">
@@ -726,12 +810,15 @@ p {{
 </div>
 
 <script>
+
 setTimeout(function() {{
-    window.location.replace({js_destination});
-}}, 900);
+    window.location.replace({destination!r});
+}}, 1200);
+
 </script>
 
 </body>
+
 </html>"""
 
 
@@ -765,19 +852,9 @@ def follow(code):
 
     increment_click(code)
 
-    # Discord and other preview crawlers receive
-    # the metadata page instead of being redirected.
-    #
-    # Normal browsers also receive the page and are
-    # automatically redirected after a short delay.
-
-    return Response(
-        preview_page(
-            code,
-            link["url"]
-        ),
-        status=200,
-        mimetype="text/html"
+    return preview_page(
+        code,
+        link["url"]
     )
 
 
@@ -787,6 +864,7 @@ def follow(code):
 
 @app.errorhandler(404)
 def not_found(error):
+
     return jsonify({
         "success": False,
         "error": "Endpoint not found"
@@ -795,6 +873,7 @@ def not_found(error):
 
 @app.errorhandler(500)
 def server_error(error):
+
     return jsonify({
         "success": False,
         "error": "Internal server error"
@@ -811,13 +890,10 @@ init_db()
 if __name__ == "__main__":
 
     port = int(
-        os.environ.get(
-            "PORT",
-            5000
-        )
+        os.environ.get("PORT", 5000)
     )
 
     app.run(
         host="0.0.0.0",
         port=port
-    )
+)
