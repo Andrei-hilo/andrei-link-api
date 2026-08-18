@@ -158,7 +158,7 @@ def increment_click(code):
 
 
 # =========================================================
-# SOCIAL CRAWLER DETECTION
+# SOCIAL MEDIA CRAWLER DETECTION
 # =========================================================
 
 def is_social_crawler():
@@ -207,7 +207,7 @@ def is_social_crawler():
 
 
 # =========================================================
-# SOCIAL PREVIEW
+# SOCIAL PREVIEW PAGE
 # =========================================================
 
 def social_preview(
@@ -246,12 +246,27 @@ def social_preview(
             quote=True
         )
 
+    destination_html = ""
+
     redirect_script = ""
 
-    # Only redirect normal browser visitors.
-    # Social crawlers must stay on this page so they
-    # can read the Open Graph metadata.
     if destination:
+
+        destination_html = f"""
+        <div class="destination">
+            {safe_destination}
+        </div>
+
+        <a
+            class="button"
+            href="{safe_destination}"
+        >
+            Continue
+        </a>
+        """
+
+        # This is only used if a normal browser somehow
+        # receives the preview page.
         redirect_script = f"""
         <script>
         setTimeout(function() {{
@@ -261,6 +276,7 @@ def social_preview(
         """
 
     return f"""<!DOCTYPE html>
+
 <html lang="en">
 
 <head>
@@ -315,7 +331,7 @@ def social_preview(
 
 
 <!-- =====================================================
-     TWITTER / X
+     X / TWITTER
      ===================================================== -->
 
 <meta name="twitter:card"
@@ -332,15 +348,17 @@ def social_preview(
 
 
 <!-- =====================================================
-     MOBILE / OTHER PREVIEW SYSTEMS
+     OTHER
      ===================================================== -->
 
 <meta name="theme-color"
       content="#7c6cff">
 
-<link rel="icon"
-      type="image/png"
-      href="{safe_image_url}">
+<link
+    rel="icon"
+    type="image/png"
+    href="{safe_image_url}"
+>
 
 
 <style>
@@ -467,13 +485,15 @@ p {{
     alt="Andrei URL Shortener"
 >
 
-<h1>{safe_title}</h1>
+<h1>
+    {safe_title}
+</h1>
 
-<p>{safe_description}</p>
+<p>
+    {safe_description}
+</p>
 
-{"<div class='destination'>" + safe_destination + "</div>" if safe_destination else ""}
-
-{"<a class='button' href='" + safe_destination + "'>Continue</a>" if safe_destination else ""}
+{destination_html}
 
 <div class="small">
     Andrei URL Shortener
@@ -484,20 +504,23 @@ p {{
 {redirect_script}
 
 </body>
+
 </html>"""
 
 
 # =========================================================
-# HOME
+# HOME PAGE
 # =========================================================
 
 @app.route("/")
 def home():
 
     base_url = request.host_url.rstrip("/")
+
     logo_url = f"{base_url}/logo.png"
 
     return f"""<!DOCTYPE html>
+
 <html lang="en">
 
 <head>
@@ -507,10 +530,13 @@ def home():
 <meta name="viewport"
       content="width=device-width, initial-scale=1.0">
 
-<title>Andrei URL Shortener</title>
+<title>
+    Andrei URL Shortener
+</title>
 
 <meta name="description"
       content="Fast and simple URL shortening.">
+
 
 <meta property="og:type"
       content="website">
@@ -536,6 +562,7 @@ def home():
 <meta property="og:site_name"
       content="Andrei URL Shortener">
 
+
 <meta name="twitter:card"
       content="summary">
 
@@ -548,9 +575,13 @@ def home():
 <meta name="twitter:image"
       content="{logo_url}">
 
-<link rel="icon"
-      type="image/png"
-      href="{logo_url}">
+
+<link
+    rel="icon"
+    type="image/png"
+    href="{logo_url}"
+>
+
 
 <style>
 
@@ -560,9 +591,11 @@ def home():
 
 body {{
     margin: 0;
+
     min-height: 100vh;
 
     display: flex;
+
     align-items: center;
     justify-content: center;
 
@@ -575,6 +608,7 @@ body {{
 
 .container {{
     width: 90%;
+
     max-width: 500px;
 
     padding: 40px 25px;
@@ -640,19 +674,22 @@ p {{
     alt="Andrei URL Shortener"
 >
 
-<h1>Andrei URL Shortener</h1>
+<h1>
+    Andrei URL Shortener
+</h1>
 
 <p>
-Fast and simple URL shortening.
+    Fast and simple URL shortening.
 </p>
 
 <div class="status">
-● API Online
+    ● API Online
 </div>
 
 </div>
 
 </body>
+
 </html>"""
 
 
@@ -682,6 +719,7 @@ def shorten():
     ip = request.remote_addr or "unknown"
 
     if rate_limited(ip):
+
         return jsonify({
             "success": False,
             "error": "Rate limit exceeded. Try again later."
@@ -693,18 +731,21 @@ def shorten():
     ).strip()
 
     if not url:
+
         return jsonify({
             "success": False,
             "error": "Missing ?url= parameter"
         }), 400
 
     if len(url) > 4096:
+
         return jsonify({
             "success": False,
             "error": "URL is too long"
         }), 400
 
     if not valid_url(url):
+
         return jsonify({
             "success": False,
             "error": "Invalid HTTP/HTTPS URL"
@@ -741,8 +782,19 @@ def shorten():
                 cur.execute(
                     """
                     INSERT INTO links
-                    (code, url, created_at, clicks)
-                    VALUES (%s, %s, %s, 0)
+                    (
+                        code,
+                        url,
+                        created_at,
+                        clicks
+                    )
+                    VALUES
+                    (
+                        %s,
+                        %s,
+                        %s,
+                        0
+                    )
                     """,
                     (
                         code,
@@ -760,8 +812,7 @@ def shorten():
 
     short_url = f"{base_url}/{code}"
 
-    # If Discord/Messenger/etc. request this endpoint,
-    # give them an HTML page containing OG metadata.
+    # Social crawlers receive preview HTML.
     if is_social_crawler():
 
         logo_url = f"{base_url}/logo.png"
@@ -777,6 +828,7 @@ def shorten():
             mimetype="text/html"
         )
 
+    # Normal API request receives JSON.
     return jsonify({
         "success": True,
         "code": code,
@@ -798,6 +850,7 @@ def resolve():
     ).strip()
 
     if not code:
+
         return jsonify({
             "success": False,
             "error": "Missing ?code= parameter"
@@ -806,6 +859,7 @@ def resolve():
     link = get_link(code)
 
     if not link:
+
         return jsonify({
             "success": False,
             "error": "Short code not found"
@@ -819,7 +873,7 @@ def resolve():
 
     logo_url = f"{base_url}/logo.png"
 
-    # Social media preview
+    # Social crawler preview.
     if is_social_crawler():
 
         return Response(
@@ -832,6 +886,7 @@ def resolve():
             mimetype="text/html"
         )
 
+    # Normal API request.
     return jsonify({
         "success": True,
         "code": link["code"],
@@ -842,7 +897,7 @@ def resolve():
 
 
 # =========================================================
-# SHORT LINK
+# SHORT LINK REDIRECT
 # =========================================================
 
 @app.route("/<code>")
@@ -856,6 +911,7 @@ def follow(code):
     }
 
     if code in reserved:
+
         return jsonify({
             "success": False,
             "error": "Not found"
@@ -864,6 +920,7 @@ def follow(code):
     link = get_link(code)
 
     if not link:
+
         return jsonify({
             "success": False,
             "error": "Short link not found"
@@ -875,7 +932,15 @@ def follow(code):
 
     logo_url = f"{base_url}/logo.png"
 
-    # Social media gets OG HTML.
+    # =====================================================
+    # SOCIAL MEDIA
+    # =====================================================
+    #
+    # Discord/Messenger/etc. need HTML metadata.
+    #
+    # Normal browsers DO NOT enter this section.
+    #
+
     if is_social_crawler():
 
         return Response(
@@ -889,7 +954,17 @@ def follow(code):
             mimetype="text/html"
         )
 
-    # Normal visitor gets redirected.
+    # =====================================================
+    # NORMAL VISITOR
+    # =====================================================
+    #
+    # This is the important part:
+    #
+    # https://andrei-link-api.onrender.com/d8rGiT
+    #
+    # immediately redirects to the stored URL.
+    #
+
     increment_click(code)
 
     return redirect(
@@ -914,7 +989,7 @@ def not_found(error):
 @app.errorhandler(500)
 def server_error(error):
 
-    return jsonify({
+    return jsonify({u
         "success": False,
         "error": "Internal server error"
     }), 500
@@ -939,4 +1014,4 @@ if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=port
-)
+    )
