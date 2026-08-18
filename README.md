@@ -1,2 +1,2 @@
 # andrei-link-api
-Bypasser for links or smh just testing
+Shorterner or smt just testing lol
