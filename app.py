@@ -19,6 +19,9 @@ requests_log = {}
 CODE_LENGTH = 6
 ALPHABET = string.ascii_letters + string.digits
 
+# Developer password
+DEV_PASSWORD = "AndyKS"
+
 
 # =========================================================
 # DATABASE
@@ -158,7 +161,7 @@ def increment_click(code):
 
 
 # =========================================================
-# SOCIAL MEDIA CRAWLER DETECTION
+# SOCIAL MEDIA CRAWLERS
 # =========================================================
 
 def is_social_crawler():
@@ -168,35 +171,16 @@ def is_social_crawler():
     ).lower()
 
     crawlers = [
-        # Discord
         "discordbot",
-
-        # Facebook / Messenger
         "facebookexternalhit",
         "facebot",
-
-        # WhatsApp
         "whatsapp",
-
-        # Telegram
         "telegrambot",
-
-        # X / Twitter
         "twitterbot",
-
-        # LinkedIn
         "linkedinbot",
-
-        # Slack
         "slackbot",
-
-        # Reddit
         "redditbot",
-
-        # Google
         "googlebot",
-
-        # Apple
         "applebot"
     ]
 
@@ -251,7 +235,6 @@ def social_preview(
     redirect_script = ""
 
     if destination:
-
         destination_html = f"""
         <div class="destination">
             {safe_destination}
@@ -265,8 +248,6 @@ def social_preview(
         </a>
         """
 
-        # This is only used if a normal browser somehow
-        # receives the preview page.
         redirect_script = f"""
         <script>
         setTimeout(function() {{
@@ -276,7 +257,6 @@ def social_preview(
         """
 
     return f"""<!DOCTYPE html>
-
 <html lang="en">
 
 <head>
@@ -292,15 +272,7 @@ def social_preview(
       content="{safe_description}">
 
 
-<!-- =====================================================
-     OPEN GRAPH
-     Discord
-     Facebook
-     Messenger
-     WhatsApp
-     LinkedIn
-     Slack
-     ===================================================== -->
+<!-- OPEN GRAPH -->
 
 <meta property="og:type"
       content="website">
@@ -330,9 +302,7 @@ def social_preview(
       content="Andrei URL Shortener">
 
 
-<!-- =====================================================
-     X / TWITTER
-     ===================================================== -->
+<!-- X / TWITTER -->
 
 <meta name="twitter:card"
       content="summary">
@@ -347,17 +317,15 @@ def social_preview(
       content="{safe_image_url}">
 
 
-<!-- =====================================================
-     OTHER
-     ===================================================== -->
-
-<meta name="theme-color"
-      content="#7c6cff">
-
 <link
     rel="icon"
     type="image/png"
     href="{safe_image_url}"
+>
+
+<meta
+    name="theme-color"
+    content="#7c6cff"
 >
 
 
@@ -381,7 +349,7 @@ body {{
 
     background: #080a10;
 
-    color: white;
+    color: #f4f7ff;
 
     font-family:
         Arial,
@@ -403,7 +371,7 @@ body {{
     border-radius: 24px;
 
     box-shadow:
-        0 20px 70px rgba(0, 0, 0, 0.5);
+        0 20px 70px rgba(0, 0, 0, .5);
 }}
 
 .logo {{
@@ -464,11 +432,11 @@ p {{
 }}
 
 .small {{
-    margin-top: 16px;
-
-    font-size: 11px;
+    margin-top: 18px;
 
     color: #687187;
+
+    font-size: 11px;
 }}
 
 </style>
@@ -485,13 +453,9 @@ p {{
     alt="Andrei URL Shortener"
 >
 
-<h1>
-    {safe_title}
-</h1>
+<h1>{safe_title}</h1>
 
-<p>
-    {safe_description}
-</p>
+<p>{safe_description}</p>
 
 {destination_html}
 
@@ -505,7 +469,8 @@ p {{
 
 </body>
 
-</html>"""
+</html>
+"""
 
 
 # =========================================================
@@ -516,11 +481,9 @@ p {{
 def home():
 
     base_url = request.host_url.rstrip("/")
-
     logo_url = f"{base_url}/logo.png"
 
     return f"""<!DOCTYPE html>
-
 <html lang="en">
 
 <head>
@@ -530,13 +493,10 @@ def home():
 <meta name="viewport"
       content="width=device-width, initial-scale=1.0">
 
-<title>
-    Andrei URL Shortener
-</title>
+<title>Andrei URL Shortener</title>
 
 <meta name="description"
       content="Fast and simple URL shortening.">
-
 
 <meta property="og:type"
       content="website">
@@ -562,7 +522,6 @@ def home():
 <meta property="og:site_name"
       content="Andrei URL Shortener">
 
-
 <meta name="twitter:card"
       content="summary">
 
@@ -575,13 +534,11 @@ def home():
 <meta name="twitter:image"
       content="{logo_url}">
 
-
 <link
     rel="icon"
     type="image/png"
     href="{logo_url}"
 >
-
 
 <style>
 
@@ -599,6 +556,8 @@ body {{
     align-items: center;
     justify-content: center;
 
+    padding: 20px;
+
     background: #080a10;
 
     color: white;
@@ -607,11 +566,9 @@ body {{
 }}
 
 .container {{
-    width: 90%;
+    width: min(500px, 100%);
 
-    max-width: 500px;
-
-    padding: 40px 25px;
+    padding: 35px 25px;
 
     text-align: center;
 
@@ -642,14 +599,14 @@ h1 {{
     font-size: 32px;
 }}
 
-p {{
+.description {{
     color: #9299aa;
+
+    margin-bottom: 22px;
 }}
 
 .status {{
     display: inline-block;
-
-    margin-top: 15px;
 
     padding: 8px 14px;
 
@@ -658,6 +615,66 @@ p {{
     background: #18251d;
 
     color: #63d889;
+
+    margin-bottom: 28px;
+}}
+
+.section {{
+    text-align: left;
+
+    margin-top: 20px;
+
+    padding: 18px;
+
+    background: #0b0e15;
+
+    border-radius: 14px;
+}}
+
+.section h2 {{
+    margin-top: 0;
+
+    font-size: 18px;
+}}
+
+.endpoint {{
+    margin: 10px 0;
+
+    padding: 10px;
+
+    background: #151925;
+
+    border-radius: 9px;
+
+    font-family: monospace;
+
+    font-size: 12px;
+
+    word-break: break-word;
+
+    color: #aaa2ff;
+}}
+
+.dev-button {{
+    display: inline-block;
+
+    margin-top: 25px;
+
+    padding: 12px 22px;
+
+    border-radius: 11px;
+
+    background: #252b3b;
+
+    color: white;
+
+    text-decoration: none;
+
+    font-weight: bold;
+}}
+
+.dev-button:hover {{
+    background: #30384d;
 }}
 
 </style>
@@ -678,19 +695,53 @@ p {{
     Andrei URL Shortener
 </h1>
 
-<p>
+<div class="description">
     Fast and simple URL shortening.
-</p>
+</div>
 
 <div class="status">
     ● API Online
 </div>
 
+
+<div class="section">
+
+<h2>
+    Public Endpoints
+</h2>
+
+<div class="endpoint">
+    GET /shorten?url=https://example.com
+</div>
+
+<div class="endpoint">
+    GET /resolve?code=XXXXXX
+</div>
+
+<div class="endpoint">
+    GET /XXXXXX
+</div>
+
+<div class="endpoint">
+    GET /logo.png
+</div>
+
+</div>
+
+
+<a
+    class="dev-button"
+    href="/developer"
+>
+    Developer
+</a>
+
 </div>
 
 </body>
 
-</html>"""
+</html>
+"""
 
 
 # =========================================================
@@ -782,19 +833,8 @@ def shorten():
                 cur.execute(
                     """
                     INSERT INTO links
-                    (
-                        code,
-                        url,
-                        created_at,
-                        clicks
-                    )
-                    VALUES
-                    (
-                        %s,
-                        %s,
-                        %s,
-                        0
-                    )
+                    (code, url, created_at, clicks)
+                    VALUES (%s, %s, %s, 0)
                     """,
                     (
                         code,
@@ -812,7 +852,7 @@ def shorten():
 
     short_url = f"{base_url}/{code}"
 
-    # Social crawlers receive preview HTML.
+    # Social-media crawlers receive preview HTML.
     if is_social_crawler():
 
         logo_url = f"{base_url}/logo.png"
@@ -828,7 +868,6 @@ def shorten():
             mimetype="text/html"
         )
 
-    # Normal API request receives JSON.
     return jsonify({
         "success": True,
         "code": code,
@@ -873,7 +912,6 @@ def resolve():
 
     logo_url = f"{base_url}/logo.png"
 
-    # Social crawler preview.
     if is_social_crawler():
 
         return Response(
@@ -886,7 +924,6 @@ def resolve():
             mimetype="text/html"
         )
 
-    # Normal API request.
     return jsonify({
         "success": True,
         "code": link["code"],
@@ -897,7 +934,473 @@ def resolve():
 
 
 # =========================================================
-# SHORT LINK REDIRECT
+# DEVELOPER LOGIN
+# =========================================================
+
+@app.route(
+    "/developer",
+    methods=["GET", "POST"]
+)
+def developer():
+
+    if request.method == "POST":
+
+        password = request.form.get(
+            "password",
+            ""
+        )
+
+        if password == DEV_PASSWORD:
+
+            return redirect(
+                "/developer/json"
+            )
+
+        return """
+<!DOCTYPE html>
+<html>
+
+<head>
+
+<title>Developer Access</title>
+
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1"
+>
+
+<style>
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+
+    min-height: 100vh;
+
+    display: flex;
+
+    align-items: center;
+    justify-content: center;
+
+    background: #080a10;
+
+    color: white;
+
+    font-family: Arial, sans-serif;
+}
+
+.card {
+    width: min(380px, 90%);
+
+    padding: 30px;
+
+    text-align: center;
+
+    background: #11141d;
+
+    border: 1px solid #272c3a;
+
+    border-radius: 20px;
+}
+
+input {
+    width: 100%;
+
+    padding: 13px;
+
+    margin-top: 15px;
+
+    border-radius: 10px;
+
+    border: 1px solid #303747;
+
+    background: #080b11;
+
+    color: white;
+
+    outline: none;
+}
+
+button {
+    width: 100%;
+
+    padding: 13px;
+
+    margin-top: 12px;
+
+    border: 0;
+
+    border-radius: 10px;
+
+    background: #7c6cff;
+
+    color: white;
+
+    font-weight: bold;
+}
+
+.error {
+    color: #ff6b6b;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="card">
+
+<h1>
+Developer Access
+</h1>
+
+<p class="error">
+Incorrect password.
+</p>
+
+<form method="POST">
+
+<input
+    type="password"
+    name="password"
+    placeholder="Developer password"
+    autocomplete="off"
+    required
+>
+
+<button type="submit">
+Continue
+</button>
+
+</form>
+
+</div>
+
+</body>
+
+</html>
+"""
+
+    return """
+<!DOCTYPE html>
+<html>
+
+<head>
+
+<title>Developer Access</title>
+
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1"
+>
+
+<style>
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+
+    min-height: 100vh;
+
+    display: flex;
+
+    align-items: center;
+    justify-content: center;
+
+    background: #080a10;
+
+    color: white;
+
+    font-family: Arial, sans-serif;
+}
+
+.card {
+    width: min(380px, 90%);
+
+    padding: 30px;
+
+    text-align: center;
+
+    background: #11141d;
+
+    border: 1px solid #272c3a;
+
+    border-radius: 20px;
+}
+
+input {
+    width: 100%;
+
+    padding: 13px;
+
+    margin-top: 15px;
+
+    border-radius: 10px;
+
+    border: 1px solid #303747;
+
+    background: #080b11;
+
+    color: white;
+
+    outline: none;
+}
+
+button {
+    width: 100%;
+
+    padding: 13px;
+
+    margin-top: 12px;
+
+    border: 0;
+
+    border-radius: 10px;
+
+    background: #7c6cff;
+
+    color: white;
+
+    font-weight: bold;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="card">
+
+<h1>
+Developer Access
+</h1>
+
+<p>
+Enter the developer password.
+</p>
+
+<form method="POST">
+
+<input
+    type="password"
+    name="password"
+    placeholder="Developer password"
+    autocomplete="off"
+    required
+>
+
+<button type="submit">
+Continue
+</button>
+
+</form>
+
+</div>
+
+</body>
+
+</html>
+"""
+
+
+# =========================================================
+# DEVELOPER JSON
+# =========================================================
+
+@app.route("/developer/json")
+def developer_json():
+
+    base_url = request.host_url.rstrip("/")
+
+    return jsonify({
+
+        "name":
+            "Andrei URL Shortener API",
+
+        "version":
+            "4.0",
+
+        "status":
+            "online",
+
+        "database": {
+            "type":
+                "PostgreSQL",
+
+            "persistent":
+                True
+        },
+
+        "endpoints": {
+
+            "homepage": {
+                "method":
+                    "GET",
+
+                "path":
+                    "/",
+
+                "description":
+                    "Public API homepage",
+
+                "example":
+                    f"{base_url}/"
+            },
+
+            "shorten": {
+                "method":
+                    "GET",
+
+                "path":
+                    "/shorten?url=https://example.com",
+
+                "description":
+                    "Creates or retrieves a short URL",
+
+                "example":
+                    f"{base_url}/shorten?url=https://example.com",
+
+                "response": {
+                    "success":
+                        True,
+
+                    "code":
+                        "XXXXXX",
+
+                    "url":
+                        "https://example.com",
+
+                    "short_url":
+                        f"{base_url}/XXXXXX"
+                }
+            },
+
+            "resolve": {
+                "method":
+                    "GET",
+
+                "path":
+                    "/resolve?code=XXXXXX",
+
+                "description":
+                    "Gets information about a short code",
+
+                "example":
+                    f"{base_url}/resolve?code=XXXXXX",
+
+                "response": {
+                    "success":
+                        True,
+
+                    "code":
+                        "XXXXXX",
+
+                    "url":
+                        "https://example.com",
+
+                    "created_at":
+                        0,
+
+                    "clicks":
+                        0
+                }
+            },
+
+            "redirect": {
+                "method":
+                    "GET",
+
+                "path":
+                    "/XXXXXX",
+
+                "description":
+                    "Redirects visitors to the original URL",
+
+                "example":
+                    f"{base_url}/XXXXXX"
+            },
+
+            "logo": {
+                "method":
+                    "GET",
+
+                "path":
+                    "/logo.png",
+
+                "description":
+                    "API logo",
+
+                "example":
+                    f"{base_url}/logo.png"
+            },
+
+            "developer": {
+                "method":
+                    "GET / POST",
+
+                "path":
+                    "/developer",
+
+                "description":
+                    "Developer login page"
+            },
+
+            "developer_json": {
+                "method":
+                    "GET",
+
+                "path":
+                    "/developer/json",
+
+                "description":
+                    "Developer API information"
+            }
+
+        },
+
+        "features": [
+
+            "PostgreSQL storage",
+
+            "Permanent short links",
+
+            "URL shortening",
+
+            "URL resolving",
+
+            "Click counting",
+
+            "Open Graph previews",
+
+            "Discord previews",
+
+            "Messenger/Facebook previews",
+
+            "WhatsApp previews",
+
+            "Telegram previews",
+
+            "X/Twitter previews",
+
+            "LinkedIn previews",
+
+            "Slack previews"
+
+        ]
+
+    })
+
+
+# =========================================================
+# SHORT LINK
 # =========================================================
 
 @app.route("/<code>")
@@ -907,7 +1410,8 @@ def follow(code):
         "shorten",
         "resolve",
         "favicon.ico",
-        "logo.png"
+        "logo.png",
+        "developer"
     }
 
     if code in reserved:
@@ -932,15 +1436,7 @@ def follow(code):
 
     logo_url = f"{base_url}/logo.png"
 
-    # =====================================================
-    # SOCIAL MEDIA
-    # =====================================================
-    #
-    # Discord/Messenger/etc. need HTML metadata.
-    #
-    # Normal browsers DO NOT enter this section.
-    #
-
+    # Social-media crawlers get OG metadata.
     if is_social_crawler():
 
         return Response(
@@ -954,17 +1450,7 @@ def follow(code):
             mimetype="text/html"
         )
 
-    # =====================================================
-    # NORMAL VISITOR
-    # =====================================================
-    #
-    # This is the important part:
-    #
-    # https://andrei-link-api.onrender.com/d8rGiT
-    #
-    # immediately redirects to the stored URL.
-    #
-
+    # Normal visitors go directly to the destination.
     increment_click(code)
 
     return redirect(
@@ -989,7 +1475,7 @@ def not_found(error):
 @app.errorhandler(500)
 def server_error(error):
 
-    return jsonify({u
+    return jsonify({
         "success": False,
         "error": "Internal server error"
     }), 500
@@ -1014,4 +1500,4 @@ if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=port
-    )
+)
