@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, redirect, send_from_directory
+from flask import Flask, request, jsonify, redirect, send_from_directory, Response
 from urllib.parse import urlparse
 import psycopg2
 import psycopg2.extras
@@ -107,9 +107,7 @@ def generate_code():
                     (code,)
                 )
 
-                exists = cur.fetchone()
-
-                if not exists:
+                if not cur.fetchone():
                     return code
 
         finally:
@@ -160,7 +158,337 @@ def increment_click(code):
 
 
 # =========================================================
-# HOMEPAGE
+# SOCIAL CRAWLER DETECTION
+# =========================================================
+
+def is_social_crawler():
+    user_agent = request.headers.get(
+        "User-Agent",
+        ""
+    ).lower()
+
+    crawlers = [
+        # Discord
+        "discordbot",
+
+        # Facebook / Messenger
+        "facebookexternalhit",
+        "facebot",
+
+        # WhatsApp
+        "whatsapp",
+
+        # Telegram
+        "telegrambot",
+
+        # X / Twitter
+        "twitterbot",
+
+        # LinkedIn
+        "linkedinbot",
+
+        # Slack
+        "slackbot",
+
+        # Reddit
+        "redditbot",
+
+        # Google
+        "googlebot",
+
+        # Apple
+        "applebot"
+    ]
+
+    return any(
+        crawler in user_agent
+        for crawler in crawlers
+    )
+
+
+# =========================================================
+# SOCIAL PREVIEW
+# =========================================================
+
+def social_preview(
+    title,
+    description,
+    page_url,
+    image_url,
+    destination=None
+):
+
+    safe_title = html.escape(
+        title,
+        quote=True
+    )
+
+    safe_description = html.escape(
+        description,
+        quote=True
+    )
+
+    safe_page_url = html.escape(
+        page_url,
+        quote=True
+    )
+
+    safe_image_url = html.escape(
+        image_url,
+        quote=True
+    )
+
+    safe_destination = ""
+
+    if destination:
+        safe_destination = html.escape(
+            destination,
+            quote=True
+        )
+
+    redirect_script = ""
+
+    # Only redirect normal browser visitors.
+    # Social crawlers must stay on this page so they
+    # can read the Open Graph metadata.
+    if destination:
+        redirect_script = f"""
+        <script>
+        setTimeout(function() {{
+            window.location.replace({destination!r});
+        }}, 1200);
+        </script>
+        """
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta name="viewport"
+      content="width=device-width, initial-scale=1.0">
+
+<title>{safe_title}</title>
+
+<meta name="description"
+      content="{safe_description}">
+
+
+<!-- =====================================================
+     OPEN GRAPH
+     Discord
+     Facebook
+     Messenger
+     WhatsApp
+     LinkedIn
+     Slack
+     ===================================================== -->
+
+<meta property="og:type"
+      content="website">
+
+<meta property="og:title"
+      content="{safe_title}">
+
+<meta property="og:description"
+      content="{safe_description}">
+
+<meta property="og:url"
+      content="{safe_page_url}">
+
+<meta property="og:image"
+      content="{safe_image_url}">
+
+<meta property="og:image:alt"
+      content="Andrei URL Shortener">
+
+<meta property="og:image:width"
+      content="512">
+
+<meta property="og:image:height"
+      content="512">
+
+<meta property="og:site_name"
+      content="Andrei URL Shortener">
+
+
+<!-- =====================================================
+     TWITTER / X
+     ===================================================== -->
+
+<meta name="twitter:card"
+      content="summary">
+
+<meta name="twitter:title"
+      content="{safe_title}">
+
+<meta name="twitter:description"
+      content="{safe_description}">
+
+<meta name="twitter:image"
+      content="{safe_image_url}">
+
+
+<!-- =====================================================
+     MOBILE / OTHER PREVIEW SYSTEMS
+     ===================================================== -->
+
+<meta name="theme-color"
+      content="#7c6cff">
+
+<link rel="icon"
+      type="image/png"
+      href="{safe_image_url}">
+
+
+<style>
+
+* {{
+    box-sizing: border-box;
+}}
+
+body {{
+    margin: 0;
+
+    min-height: 100vh;
+
+    display: flex;
+
+    align-items: center;
+    justify-content: center;
+
+    padding: 20px;
+
+    background: #080a10;
+
+    color: white;
+
+    font-family:
+        Arial,
+        Helvetica,
+        sans-serif;
+}}
+
+.card {{
+    width: min(450px, 100%);
+
+    padding: 32px;
+
+    text-align: center;
+
+    background: #11141d;
+
+    border: 1px solid #272c3a;
+
+    border-radius: 24px;
+
+    box-shadow:
+        0 20px 70px rgba(0, 0, 0, 0.5);
+}}
+
+.logo {{
+    width: 130px;
+    height: 130px;
+
+    object-fit: cover;
+
+    border-radius: 28px;
+
+    margin-bottom: 20px;
+}}
+
+h1 {{
+    margin: 0 0 10px;
+
+    font-size: 28px;
+}}
+
+p {{
+    color: #9299aa;
+
+    line-height: 1.5;
+}}
+
+.destination {{
+    margin-top: 18px;
+
+    padding: 14px;
+
+    border-radius: 12px;
+
+    background: #080b11;
+
+    color: #9b91ff;
+
+    word-break: break-word;
+
+    font-size: 13px;
+}}
+
+.button {{
+    display: inline-block;
+
+    margin-top: 18px;
+
+    padding: 12px 22px;
+
+    border-radius: 12px;
+
+    background: #7c6cff;
+
+    color: white;
+
+    text-decoration: none;
+
+    font-weight: bold;
+}}
+
+.small {{
+    margin-top: 16px;
+
+    font-size: 11px;
+
+    color: #687187;
+}}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="card">
+
+<img
+    class="logo"
+    src="{safe_image_url}"
+    alt="Andrei URL Shortener"
+>
+
+<h1>{safe_title}</h1>
+
+<p>{safe_description}</p>
+
+{"<div class='destination'>" + safe_destination + "</div>" if safe_destination else ""}
+
+{"<a class='button' href='" + safe_destination + "'>Continue</a>" if safe_destination else ""}
+
+<div class="small">
+    Andrei URL Shortener
+</div>
+
+</div>
+
+{redirect_script}
+
+</body>
+</html>"""
+
+
+# =========================================================
+# HOME
 # =========================================================
 
 @app.route("/")
@@ -174,276 +502,157 @@ def home():
 
 <head>
 
-    <meta charset="UTF-8">
+<meta charset="UTF-8">
 
-    <meta name="viewport"
-          content="width=device-width, initial-scale=1.0">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1.0">
 
-    <title>Andrei URL Shortener</title>
+<title>Andrei URL Shortener</title>
 
-    <meta name="description"
-          content="Fast and simple URL shortening by Andrei.">
+<meta name="description"
+      content="Fast and simple URL shortening.">
 
-    <!-- Open Graph -->
+<meta property="og:type"
+      content="website">
 
-    <meta property="og:type"
-          content="website">
+<meta property="og:title"
+      content="Andrei URL Shortener">
 
-    <meta property="og:title"
-          content="Andrei URL Shortener">
+<meta property="og:description"
+      content="Fast and simple URL shortening.">
 
-    <meta property="og:description"
-          content="Fast and simple URL shortening.">
+<meta property="og:url"
+      content="{base_url}">
 
-    <meta property="og:url"
-          content="{base_url}/">
+<meta property="og:image"
+      content="{logo_url}">
 
-    <meta property="og:image"
-          content="{logo_url}">
+<meta property="og:image:width"
+      content="512">
 
-    <meta property="og:image:alt"
-          content="Andrei URL Shortener">
+<meta property="og:image:height"
+      content="512">
 
-    <meta property="og:site_name"
-          content="Andrei URL Shortener">
+<meta property="og:site_name"
+      content="Andrei URL Shortener">
 
-    <!-- Twitter -->
+<meta name="twitter:card"
+      content="summary">
 
-    <meta name="twitter:card"
-          content="summary">
+<meta name="twitter:title"
+      content="Andrei URL Shortener">
 
-    <meta name="twitter:title"
-          content="Andrei URL Shortener">
+<meta name="twitter:description"
+      content="Fast and simple URL shortening.">
 
-    <meta name="twitter:description"
-          content="Fast and simple URL shortening.">
+<meta name="twitter:image"
+      content="{logo_url}">
 
-    <meta name="twitter:image"
-          content="{logo_url}">
+<link rel="icon"
+      type="image/png"
+      href="{logo_url}">
 
-    <style>
+<style>
 
-        * {{
-            box-sizing: border-box;
-        }}
+* {{
+    box-sizing: border-box;
+}}
 
-        html {{
-            min-height: 100%;
-        }}
+body {{
+    margin: 0;
+    min-height: 100vh;
 
-        body {{
-            margin: 0;
-            min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 
-            display: flex;
-            align-items: center;
-            justify-content: center;
+    background: #080a10;
 
-            padding: 20px;
+    color: white;
 
-            background:
-                radial-gradient(
-                    circle at top,
-                    #20283f 0%,
-                    #0b0d14 45%,
-                    #070910 100%
-                );
+    font-family: Arial, sans-serif;
+}}
 
-            color: #ffffff;
+.container {{
+    width: 90%;
+    max-width: 500px;
 
-            font-family:
-                Inter,
-                system-ui,
-                -apple-system,
-                BlinkMacSystemFont,
-                "Segoe UI",
-                Arial,
-                sans-serif;
-        }}
+    padding: 40px 25px;
 
-        .container {{
-            width: min(500px, 100%);
+    text-align: center;
 
-            padding: 42px 28px;
+    background: #11141d;
 
-            text-align: center;
+    border: 1px solid #272c3a;
 
-            background: rgba(17, 20, 29, 0.94);
+    border-radius: 24px;
 
-            border: 1px solid #292f40;
+    box-shadow:
+        0 20px 60px rgba(0,0,0,.5);
+}}
 
-            border-radius: 28px;
+.logo {{
+    width: 150px;
+    height: 150px;
 
-            box-shadow:
-                0 25px 80px rgba(0, 0, 0, 0.55);
+    object-fit: cover;
 
-            backdrop-filter: blur(12px);
-        }}
+    border-radius: 30px;
 
-        .logo {{
-            width: 150px;
-            height: 150px;
+    margin-bottom: 20px;
+}}
 
-            display: block;
+h1 {{
+    margin: 0 0 10px;
 
-            margin: 0 auto 24px;
+    font-size: 32px;
+}}
 
-            object-fit: cover;
+p {{
+    color: #9299aa;
+}}
 
-            border-radius: 32px;
+.status {{
+    display: inline-block;
 
-            box-shadow:
-                0 12px 40px rgba(0, 0, 0, 0.45);
-        }}
+    margin-top: 15px;
 
-        h1 {{
-            margin: 0;
+    padding: 8px 14px;
 
-            font-size: 32px;
+    border-radius: 20px;
 
-            font-weight: 800;
+    background: #18251d;
 
-            letter-spacing: -0.5px;
-        }}
+    color: #63d889;
+}}
 
-        .description {{
-            margin: 12px 0 24px;
-
-            color: #9aa3b8;
-
-            font-size: 16px;
-
-            line-height: 1.6;
-        }}
-
-        .status {{
-            display: inline-flex;
-
-            align-items: center;
-
-            gap: 8px;
-
-            padding: 9px 16px;
-
-            border-radius: 999px;
-
-            background: #15231b;
-
-            border: 1px solid #23402e;
-
-            color: #69dc91;
-
-            font-size: 14px;
-
-            font-weight: 600;
-        }}
-
-        .dot {{
-            width: 8px;
-            height: 8px;
-
-            border-radius: 50%;
-
-            background: #55d982;
-        }}
-
-        .api {{
-            margin-top: 28px;
-
-            padding: 16px;
-
-            text-align: left;
-
-            border-radius: 16px;
-
-            background: #0a0d14;
-
-            border: 1px solid #202635;
-        }}
-
-        .api-title {{
-            margin-bottom: 10px;
-
-            color: #ffffff;
-
-            font-weight: 700;
-        }}
-
-        .endpoint {{
-            margin: 7px 0;
-
-            color: #858fa5;
-
-            font-family: monospace;
-
-            font-size: 13px;
-
-            word-break: break-word;
-        }}
-
-        .brand {{
-            margin-top: 24px;
-
-            color: #596276;
-
-            font-size: 12px;
-        }}
-
-    </style>
+</style>
 
 </head>
 
 <body>
 
-    <main class="container">
+<div class="container">
 
-        <img
-            class="logo"
-            src="{logo_url}"
-            alt="Andrei URL Shortener Logo"
-        >
+<img
+    class="logo"
+    src="{logo_url}"
+    alt="Andrei URL Shortener"
+>
 
-        <h1>
-            Andrei URL Shortener
-        </h1>
+<h1>Andrei URL Shortener</h1>
 
-        <p class="description">
-            Fast and simple URL shortening.
-        </p>
+<p>
+Fast and simple URL shortening.
+</p>
 
-        <div class="status">
-            <span class="dot"></span>
-            API Online
-        </div>
+<div class="status">
+● API Online
+</div>
 
-        <div class="api">
-
-            <div class="api-title">
-                API Endpoints
-            </div>
-
-            <div class="endpoint">
-                /shorten?url=https://example.com
-            </div>
-
-            <div class="endpoint">
-                /resolve?code=XXXXXX
-            </div>
-
-            <div class="endpoint">
-                /XXXXXX
-            </div>
-
-        </div>
-
-        <div class="brand">
-            Andrei URL Shortener API
-        </div>
-
-    </main>
+</div>
 
 </body>
-
 </html>"""
 
 
@@ -455,7 +664,10 @@ def home():
 def logo():
 
     return send_from_directory(
-        os.path.join(app.root_path, "static"),
+        os.path.join(
+            app.root_path,
+            "static"
+        ),
         "logo.png"
     )
 
@@ -475,7 +687,10 @@ def shorten():
             "error": "Rate limit exceeded. Try again later."
         }), 429
 
-    url = request.args.get("url", "").strip()
+    url = request.args.get(
+        "url",
+        ""
+    ).strip()
 
     if not url:
         return jsonify({
@@ -498,6 +713,7 @@ def shorten():
     db = get_db()
 
     try:
+
         with db.cursor(
             cursor_factory=psycopg2.extras.RealDictCursor
         ) as cur:
@@ -515,9 +731,11 @@ def shorten():
             existing = cur.fetchone()
 
             if existing:
+
                 code = existing["code"]
 
             else:
+
                 code = generate_code()
 
                 cur.execute(
@@ -533,13 +751,31 @@ def shorten():
                     )
                 )
 
-                db.commit()
+            db.commit()
 
     finally:
         db.close()
 
     base_url = request.host_url.rstrip("/")
+
     short_url = f"{base_url}/{code}"
+
+    # If Discord/Messenger/etc. request this endpoint,
+    # give them an HTML page containing OG metadata.
+    if is_social_crawler():
+
+        logo_url = f"{base_url}/logo.png"
+
+        return Response(
+            social_preview(
+                "Andrei URL Shortener",
+                f"Shortened link to {url}",
+                short_url,
+                logo_url,
+                short_url
+            ),
+            mimetype="text/html"
+        )
 
     return jsonify({
         "success": True,
@@ -556,7 +792,10 @@ def shorten():
 @app.route("/resolve")
 def resolve():
 
-    code = request.args.get("code", "").strip()
+    code = request.args.get(
+        "code",
+        ""
+    ).strip()
 
     if not code:
         return jsonify({
@@ -572,6 +811,27 @@ def resolve():
             "error": "Short code not found"
         }), 404
 
+    base_url = request.host_url.rstrip("/")
+
+    page_url = (
+        f"{base_url}/resolve?code={code}"
+    )
+
+    logo_url = f"{base_url}/logo.png"
+
+    # Social media preview
+    if is_social_crawler():
+
+        return Response(
+            social_preview(
+                "Andrei URL Shortener",
+                f"Resolved destination: {link['url']}",
+                page_url,
+                logo_url
+            ),
+            mimetype="text/html"
+        )
+
     return jsonify({
         "success": True,
         "code": link["code"],
@@ -579,247 +839,6 @@ def resolve():
         "created_at": link["created_at"],
         "clicks": link["clicks"]
     })
-
-
-# =========================================================
-# SHORT LINK PREVIEW
-# =========================================================
-
-def preview_page(code, destination):
-
-    base_url = request.host_url.rstrip("/")
-
-    short_url = f"{base_url}/{code}"
-    logo_url = f"{base_url}/logo.png"
-
-    safe_destination = html.escape(
-        destination,
-        quote=True
-    )
-
-    safe_short_url = html.escape(
-        short_url,
-        quote=True
-    )
-
-    return f"""<!doctype html>
-
-<html lang="en">
-
-<head>
-
-<meta charset="utf-8">
-
-<meta name="viewport"
-      content="width=device-width, initial-scale=1">
-
-<title>Andrei URL Shortener</title>
-
-<meta name="description"
-      content="A shortened link from Andrei URL Shortener.">
-
-<!-- Open Graph -->
-
-<meta property="og:type"
-      content="website">
-
-<meta property="og:title"
-      content="Andrei URL Shortener">
-
-<meta property="og:description"
-      content="Click to visit the shortened link.">
-
-<meta property="og:url"
-      content="{safe_short_url}">
-
-<meta property="og:image"
-      content="{logo_url}">
-
-<meta property="og:image:alt"
-      content="Andrei URL Shortener">
-
-<meta property="og:site_name"
-      content="Andrei URL Shortener">
-
-<!-- Twitter -->
-
-<meta name="twitter:card"
-      content="summary">
-
-<meta name="twitter:title"
-      content="Andrei URL Shortener">
-
-<meta name="twitter:description"
-      content="Click to visit the shortened link.">
-
-<meta name="twitter:image"
-      content="{logo_url}">
-
-<style>
-
-* {{
-    box-sizing: border-box;
-}}
-
-body {{
-    margin: 0;
-
-    min-height: 100vh;
-
-    display: flex;
-
-    align-items: center;
-
-    justify-content: center;
-
-    padding: 20px;
-
-    background: #080a10;
-
-    color: #f4f7ff;
-
-    font-family:
-        Inter,
-        system-ui,
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
-        Arial,
-        sans-serif;
-}}
-
-.card {{
-    width: min(440px, 100%);
-
-    padding: 28px;
-
-    text-align: center;
-
-    background: #10131c;
-
-    border: 1px solid #252b3b;
-
-    border-radius: 24px;
-
-    box-shadow:
-        0 20px 70px rgba(0,0,0,.5);
-}}
-
-.logo {{
-    width: 110px;
-    height: 110px;
-
-    object-fit: cover;
-
-    border-radius: 22px;
-
-    margin-bottom: 16px;
-}}
-
-h1 {{
-    margin: 0 0 10px;
-
-    font-size: 27px;
-}}
-
-p {{
-    color: #8f98ad;
-
-    line-height: 1.5;
-}}
-
-.destination {{
-    margin-top: 16px;
-
-    padding: 13px;
-
-    border-radius: 12px;
-
-    background: #080b11;
-
-    color: #9a91ff;
-
-    word-break: break-word;
-
-    font-size: 13px;
-}}
-
-.button {{
-    display: inline-block;
-
-    margin-top: 18px;
-
-    padding: 12px 22px;
-
-    border-radius: 12px;
-
-    background: #7c6cff;
-
-    color: white;
-
-    text-decoration: none;
-
-    font-weight: 700;
-}}
-
-.small {{
-    margin-top: 16px;
-
-    font-size: 11px;
-
-    color: #687187;
-}}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="card">
-
-<img
-    class="logo"
-    src="{logo_url}"
-    alt="Andrei URL Shortener"
->
-
-<h1>
-    Andrei URL Shortener
-</h1>
-
-<p>
-    You're being redirected to:
-</p>
-
-<div class="destination">
-    {safe_destination}
-</div>
-
-<a
-    class="button"
-    href="{safe_destination}"
->
-    Continue
-</a>
-
-<div class="small">
-    Short link: {safe_short_url}
-</div>
-
-</div>
-
-<script>
-
-setTimeout(function() {{
-    window.location.replace({destination!r});
-}}, 1200);
-
-</script>
-
-</body>
-
-</html>"""
 
 
 # =========================================================
@@ -850,11 +869,32 @@ def follow(code):
             "error": "Short link not found"
         }), 404
 
+    base_url = request.host_url.rstrip("/")
+
+    page_url = f"{base_url}/{code}"
+
+    logo_url = f"{base_url}/logo.png"
+
+    # Social media gets OG HTML.
+    if is_social_crawler():
+
+        return Response(
+            social_preview(
+                "Andrei URL Shortener",
+                f"Click to visit {link['url']}",
+                page_url,
+                logo_url,
+                link["url"]
+            ),
+            mimetype="text/html"
+        )
+
+    # Normal visitor gets redirected.
     increment_click(code)
 
-    return preview_page(
-        code,
-        link["url"]
+    return redirect(
+        link["url"],
+        code=302
     )
 
 
@@ -890,7 +930,10 @@ init_db()
 if __name__ == "__main__":
 
     port = int(
-        os.environ.get("PORT", 5000)
+        os.environ.get(
+            "PORT",
+            5000
+        )
     )
 
     app.run(
