@@ -15,7 +15,7 @@ import string
 import time
 import os
 import html
-from functools import wraps
+import json
 
 app = Flask(__name__)
 
@@ -25,14 +25,21 @@ app = Flask(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-DEV_PASSWORD = os.environ.get("DEV_PASSWORD")
+DEV_PASSWORD = os.environ.get(
+    "DEV_PASSWORD",
+    ""
+)
 
-FLASK_SECRET_KEY = os.environ.get("FLASK_SECRET_KEY")
+FLASK_SECRET_KEY = os.environ.get(
+    "FLASK_SECRET_KEY",
+    ""
+)
 
 if not FLASK_SECRET_KEY:
-    raise RuntimeError("FLASK_SECRET_KEY is not configured")
+    FLASK_SECRET_KEY = secrets.token_hex(32)
 
 app.secret_key = FLASK_SECRET_KEY
+
 
 # =========================================================
 # SETTINGS
@@ -44,7 +51,11 @@ RATE_WINDOW = 60
 requests_log = {}
 
 CODE_LENGTH = 6
-ALPHABET = string.ascii_letters + string.digits
+
+ALPHABET = (
+    string.ascii_letters +
+    string.digits
+)
 
 
 # =========================================================
@@ -52,8 +63,11 @@ ALPHABET = string.ascii_letters + string.digits
 # =========================================================
 
 def get_db():
+
     if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL is not configured")
+        raise RuntimeError(
+            "DATABASE_URL is not configured"
+        )
 
     return psycopg2.connect(
         DATABASE_URL,
@@ -62,10 +76,16 @@ def get_db():
 
 
 def init_db():
+
     db = get_db()
 
     try:
+
         with db.cursor() as cur:
+
+            # -------------------------------------------------
+            # LINKS TABLE
+            # -------------------------------------------------
 
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS links (
@@ -77,20 +97,33 @@ def init_db():
                 )
             """)
 
-            # Stores API settings such as maintenance mode
+            # -------------------------------------------------
+            # SETTINGS TABLE
+            # -------------------------------------------------
+
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS api_settings (
-                    setting TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
+                    id BIGSERIAL PRIMARY KEY,
+                    setting TEXT,
+                    value TEXT
                 )
             """)
 
-            # Default maintenance mode
+            # -------------------------------------------------
+            # IMPORTANT MIGRATION
+            #
+            # If your old api_settings table already existed
+            # without the "setting" column, add it.
+            # -------------------------------------------------
+
             cur.execute("""
-                INSERT INTO api_settings
-                (setting, value)
-                VALUES ('maintenance', 'false')
-                ON CONFLICT (setting) DO NOTHING
+                ALTER TABLE api_settings
+                ADD COLUMN IF NOT EXISTS setting TEXT
+            """)
+
+            cur.execute("""
+                ALTER TABLE api_settings
+                ADD COLUMN IF NOT EXISTS value TEXT
             """)
 
         db.commit()
@@ -100,10 +133,10 @@ def init_db():
 
 
 # =========================================================
-# API STATUS
+# SETTINGS HELPERS
 # =========================================================
 
-def get_maintenance():
+def get_setting(name, default=None):
 
     db = get_db()
 
@@ -111,24 +144,28 @@ def get_maintenance():
 
         with db.cursor() as cur:
 
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT value
                 FROM api_settings
-                WHERE setting = 'maintenance'
-            """)
+                WHERE setting = %s
+                LIMIT 1
+                """,
+                (name,)
+            )
 
             row = cur.fetchone()
 
-            if not row:
-                return False
+            if row:
+                return row[0]
 
-            return row[0].lower() == "true"
+            return default
 
     finally:
         db.close()
 
 
-def set_maintenance(enabled):
+def set_setting(name, value):
 
     db = get_db()
 
@@ -136,16 +173,45 @@ def set_maintenance(enabled):
 
         with db.cursor() as cur:
 
-            cur.execute("""
-                INSERT INTO api_settings
-                (setting, value)
-                VALUES ('maintenance', %s)
+            cur.execute(
+                """
+                SELECT id
+                FROM api_settings
+                WHERE setting = %s
+                LIMIT 1
+                """,
+                (name,)
+            )
 
-                ON CONFLICT (setting)
-                DO UPDATE SET value = EXCLUDED.value
-            """, (
-                "true" if enabled else "false",
-            ))
+            row = cur.fetchone()
+
+            if row:
+
+                cur.execute(
+                    """
+                    UPDATE api_settings
+                    SET value = %s
+                    WHERE id = %s
+                    """,
+                    (
+                        str(value),
+                        row[0]
+                    )
+                )
+
+            else:
+
+                cur.execute(
+                    """
+                    INSERT INTO api_settings
+                    (setting, value)
+                    VALUES (%s, %s)
+                    """,
+                    (
+                        name,
+                        str(value)
+                    )
+                )
 
         db.commit()
 
@@ -153,29 +219,41 @@ def set_maintenance(enabled):
         db.close()
 
 
-def api_status():
+def get_status():
 
-    if get_maintenance():
-        return "maintenance"
+    return get_setting(
+        "status",
+        "online"
+    ).lower()
 
-    return "online"
+
+def maintenance_enabled():
+
+    return get_status() == "maintenance"
 
 
 # =========================================================
-# DEVELOPER AUTHENTICATION
+# AUTHENTICATION
 # =========================================================
 
-def developer_required(function):
+def developer_logged_in():
 
-    @wraps(function)
-    def wrapper(*args, **kwargs):
+    return session.get(
+        "developer_authenticated",
+        False
+    ) is True
 
-        if not session.get("developer_authenticated"):
-            return redirect("/developer")
 
-        return function(*args, **kwargs)
+def require_developer():
 
-    return wrapper
+    if not developer_logged_in():
+
+        return jsonify({
+            "success": False,
+            "error": "Developer authentication required"
+        }), 401
+
+    return None
 
 
 # =========================================================
@@ -189,11 +267,15 @@ def valid_url(url):
         parsed = urlparse(url)
 
         return (
-            parsed.scheme in ("http", "https")
+            parsed.scheme in (
+                "http",
+                "https"
+            )
             and bool(parsed.netloc)
         )
 
     except Exception:
+
         return False
 
 
@@ -201,7 +283,10 @@ def rate_limited(ip):
 
     now = time.time()
 
-    requests_log.setdefault(ip, [])
+    requests_log.setdefault(
+        ip,
+        []
+    )
 
     requests_log[ip] = [
         timestamp
@@ -233,14 +318,20 @@ def generate_code():
             with db.cursor() as cur:
 
                 cur.execute(
-                    "SELECT 1 FROM links WHERE code = %s",
+                    """
+                    SELECT 1
+                    FROM links
+                    WHERE code = %s
+                    """,
                     (code,)
                 )
 
                 if not cur.fetchone():
+
                     return code
 
         finally:
+
             db.close()
 
 
@@ -256,7 +347,11 @@ def get_link(code):
 
             cur.execute(
                 """
-                SELECT code, url, created_at, clicks
+                SELECT
+                    code,
+                    url,
+                    created_at,
+                    clicks
                 FROM links
                 WHERE code = %s
                 """,
@@ -266,6 +361,7 @@ def get_link(code):
             return cur.fetchone()
 
     finally:
+
         db.close()
 
 
@@ -289,6 +385,7 @@ def increment_click(code):
         db.commit()
 
     finally:
+
         db.close()
 
 
@@ -381,64 +478,104 @@ def social_preview(
         redirect_script = f"""
         <script>
         setTimeout(function() {{
-            window.location.replace({destination!r});
+            window.location.replace(
+                {json.dumps(destination)}
+            );
         }}, 1200);
         </script>
         """
 
     return f"""<!DOCTYPE html>
+
 <html lang="en">
 
 <head>
 
 <meta charset="UTF-8">
 
-<meta name="viewport"
-      content="width=device-width, initial-scale=1.0">
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1"
+>
 
 <title>{safe_title}</title>
 
-<meta name="description"
-      content="{safe_description}">
+<meta
+    name="description"
+    content="{safe_description}"
+>
 
-<meta property="og:type"
-      content="website">
 
-<meta property="og:title"
-      content="{safe_title}">
+<!-- OPEN GRAPH -->
 
-<meta property="og:description"
-      content="{safe_description}">
+<meta
+    property="og:type"
+    content="website"
+>
 
-<meta property="og:url"
-      content="{safe_page_url}">
+<meta
+    property="og:title"
+    content="{safe_title}"
+>
 
-<meta property="og:image"
-      content="{safe_image_url}">
+<meta
+    property="og:description"
+    content="{safe_description}"
+>
 
-<meta property="og:image:alt"
-      content="Andrei URL Shortener">
+<meta
+    property="og:url"
+    content="{safe_page_url}"
+>
 
-<meta property="og:image:width"
-      content="512">
+<meta
+    property="og:image"
+    content="{safe_image_url}"
+>
 
-<meta property="og:image:height"
-      content="512">
+<meta
+    property="og:image:alt"
+    content="Andrei URL Shortener"
+>
 
-<meta property="og:site_name"
-      content="Andrei URL Shortener">
+<meta
+    property="og:image:width"
+    content="512"
+>
 
-<meta name="twitter:card"
-      content="summary">
+<meta
+    property="og:image:height"
+    content="512"
+>
 
-<meta name="twitter:title"
-      content="{safe_title}">
+<meta
+    property="og:site_name"
+    content="Andrei URL Shortener"
+>
 
-<meta name="twitter:description"
-      content="{safe_description}">
 
-<meta name="twitter:image"
-      content="{safe_image_url}">
+<!-- SOCIAL -->
+
+<meta
+    name="twitter:card"
+    content="summary"
+>
+
+<meta
+    name="twitter:title"
+    content="{safe_title}"
+>
+
+<meta
+    name="twitter:description"
+    content="{safe_description}"
+>
+
+<meta
+    name="twitter:image"
+    content="{safe_image_url}"
+>
+
 
 <link
     rel="icon"
@@ -446,10 +583,12 @@ def social_preview(
     href="{safe_image_url}"
 >
 
+
 <meta
     name="theme-color"
     content="#7c6cff"
 >
+
 
 <style>
 
@@ -459,16 +598,19 @@ def social_preview(
 
 body {{
     margin: 0;
+
     min-height: 100vh;
 
     display: flex;
+
     align-items: center;
     justify-content: center;
 
     padding: 20px;
 
     background: #080a10;
-    color: #f4f7ff;
+
+    color: #ffffff;
 
     font-family:
         Arial,
@@ -506,11 +648,13 @@ body {{
 
 h1 {{
     margin: 0 0 10px;
+
     font-size: 28px;
 }}
 
 p {{
     color: #9299aa;
+
     line-height: 1.5;
 }}
 
@@ -599,58 +743,62 @@ def home():
 
     base_url = request.host_url.rstrip("/")
 
-    logo_url = f"{base_url}/logo.png"
+    logo_url = (
+        f"{base_url}/logo.png"
+    )
 
-    status = api_status()
+    status = get_status()
 
     if status == "maintenance":
 
-        status_text = "● Maintenance"
-        status_class = "maintenance"
+        status_text = "Maintenance"
+
+        status_color = "#ffb347"
+
+        status_background = "#302513"
 
     else:
 
-        status_text = "● API Online"
-        status_class = "online"
+        status_text = "Online"
+
+        status_color = "#63d889"
+
+        status_background = "#18251d"
 
     return f"""<!DOCTYPE html>
+
 <html lang="en">
 
 <head>
 
 <meta charset="UTF-8">
 
-<meta name="viewport"
-      content="width=device-width, initial-scale=1.0">
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1"
+>
 
 <title>Andrei URL Shortener</title>
 
-<meta name="description"
-      content="Fast and simple URL shortening.">
+<meta
+    name="description"
+    content="Andrei URL Shortener API"
+>
 
-<meta property="og:type"
-      content="website">
+<meta
+    property="og:title"
+    content="Andrei URL Shortener"
+>
 
-<meta property="og:title"
-      content="Andrei URL Shortener">
+<meta
+    property="og:description"
+    content="Fast and simple URL shortening."
+>
 
-<meta property="og:description"
-      content="Fast and simple URL shortening.">
-
-<meta property="og:url"
-      content="{base_url}">
-
-<meta property="og:image"
-      content="{logo_url}">
-
-<meta property="og:image:width"
-      content="512">
-
-<meta property="og:image:height"
-      content="512">
-
-<meta property="og:site_name"
-      content="Andrei URL Shortener">
+<meta
+    property="og:image"
+    content="{logo_url}"
+>
 
 <link
     rel="icon"
@@ -669,26 +817,21 @@ body {{
 
     min-height: 100vh;
 
-    display: flex;
-
-    align-items: center;
-    justify-content: center;
-
-    padding: 20px;
-
     background: #080a10;
 
     color: white;
 
     font-family: Arial, sans-serif;
+
+    padding: 20px;
 }}
 
 .container {{
-    width: min(520px, 100%);
+    width: min(650px, 100%);
 
-    padding: 35px 25px;
+    margin: 50px auto;
 
-    text-align: center;
+    padding: 30px;
 
     background: #11141d;
 
@@ -701,51 +844,51 @@ body {{
 }}
 
 .logo {{
-    width: 150px;
-    height: 150px;
+    display: block;
+
+    width: 130px;
+    height: 130px;
 
     object-fit: cover;
 
-    border-radius: 30px;
+    border-radius: 28px;
 
-    margin-bottom: 20px;
+    margin: 0 auto 20px;
 }}
 
 h1 {{
-    margin: 0 0 10px;
-    font-size: 32px;
+    text-align: center;
+
+    margin-bottom: 8px;
 }}
 
 .description {{
+    text-align: center;
+
     color: #9299aa;
-    margin-bottom: 22px;
+
+    margin-bottom: 25px;
 }}
 
 .status {{
-    display: inline-block;
+    display: block;
 
-    padding: 8px 14px;
+    width: fit-content;
+
+    margin: 0 auto 25px;
+
+    padding: 9px 16px;
 
     border-radius: 20px;
 
-    margin-bottom: 22px;
+    background: {status_background};
+
+    color: {status_color};
 
     font-weight: bold;
 }}
 
-.online {{
-    background: #18251d;
-    color: #63d889;
-}}
-
-.maintenance {{
-    background: #302318;
-    color: #ffb454;
-}}
-
 .section {{
-    text-align: left;
-
     margin-top: 20px;
 
     padding: 18px;
@@ -757,19 +900,20 @@ h1 {{
 
 .section h2 {{
     margin-top: 0;
+
     font-size: 18px;
 }}
 
 input {{
     width: 100%;
 
-    padding: 12px;
+    padding: 13px;
 
-    margin-top: 8px;
-
-    border: 1px solid #303747;
+    margin: 7px 0;
 
     border-radius: 10px;
+
+    border: 1px solid #303747;
 
     background: #080b11;
 
@@ -781,9 +925,9 @@ input {{
 button {{
     width: 100%;
 
-    padding: 12px;
+    padding: 13px;
 
-    margin-top: 10px;
+    margin-top: 8px;
 
     border: 0;
 
@@ -794,6 +938,8 @@ button {{
     color: white;
 
     font-weight: bold;
+
+    cursor: pointer;
 }}
 
 .endpoint {{
@@ -814,34 +960,26 @@ button {{
     color: #aaa2ff;
 }}
 
-.link {{
-    display: block;
-
-    margin-top: 10px;
-
-    color: #aaa2ff;
-
-    text-decoration: none;
-
-    word-break: break-word;
-}}
-
-.dev-button {{
-    display: inline-block;
+.links {{
+    text-align: center;
 
     margin-top: 25px;
+}}
 
-    padding: 12px 22px;
+.links a {{
+    color: #aaa2ff;
 
-    border-radius: 11px;
+    margin: 0 8px;
+}}
 
-    background: #252b3b;
+pre {{
+    white-space: pre-wrap;
 
-    color: white;
+    word-break: break-word;
 
-    text-decoration: none;
+    color: #a9b0c0;
 
-    font-weight: bold;
+    font-size: 12px;
 }}
 
 </style>
@@ -866,8 +1004,8 @@ button {{
     Fast and simple URL shortening.
 </div>
 
-<div class="status {status_class}">
-    {status_text}
+<div class="status">
+    ● API {status_text}
 </div>
 
 
@@ -877,7 +1015,10 @@ button {{
     Shorten a URL
 </h2>
 
-<form action="/shorten" method="GET">
+<form
+    action="/shorten"
+    method="GET"
+>
 
 <input
     type="url"
@@ -887,7 +1028,7 @@ button {{
 >
 
 <button type="submit">
-    Shorten
+    Shorten URL
 </button>
 
 </form>
@@ -898,10 +1039,13 @@ button {{
 <div class="section">
 
 <h2>
-    Resolve a Short Code
+    Resolve a Short Link
 </h2>
 
-<form action="/resolve" method="GET">
+<form
+    action="/resolve"
+    method="GET"
+>
 
 <input
     type="text"
@@ -922,41 +1066,79 @@ button {{
 <div class="section">
 
 <h2>
-    API Endpoints
+    Public Endpoints
 </h2>
 
 <div class="endpoint">
-    GET /shorten?url=https://example.com
+GET /shorten?url=https://example.com
 </div>
 
 <div class="endpoint">
-    GET /resolve?code=XXXXXX
+GET /resolve?code=XXXXXX
 </div>
 
 <div class="endpoint">
-    GET /XXXXXX
+GET /XXXXXX
 </div>
 
 <div class="endpoint">
-    GET /logo.png
+GET /logo.png
 </div>
 
+</div>
+
+
+<div class="section">
+
+<h2>
+    API JSON
+</h2>
+
+<p>
+The JSON version of the API homepage:
+</p>
+
+<div class="endpoint">
 <a
-    class="link"
-    href="/developer/json"
+    href="/api"
+    style="color:#aaa2ff"
 >
-    Developer JSON
+/api
 </a>
+</div>
 
 </div>
 
 
+<div class="section">
+
+<h2>
+    Developer
+</h2>
+
+<div class="endpoint">
 <a
-    class="dev-button"
     href="/developer"
+    style="color:#aaa2ff"
 >
-    Developer Panel
+Developer Panel
 </a>
+</div>
+
+</div>
+
+
+<div class="links">
+
+<a href="/api">
+JSON API
+</a>
+
+<a href="/developer">
+Developer
+</a>
+
+</div>
 
 </div>
 
@@ -964,6 +1146,84 @@ button {{
 
 </html>
 """
+
+
+# =========================================================
+# JSON API HOME
+# =========================================================
+
+@app.route("/api")
+def api_home():
+
+    base_url = request.host_url.rstrip("/")
+
+    return jsonify({
+
+        "name":
+            "Andrei URL Shortener API",
+
+        "version":
+            "5.0",
+
+        "status":
+            get_status(),
+
+        "database":
+            "PostgreSQL",
+
+        "endpoints": {
+
+            "homepage":
+                f"{base_url}/",
+
+            "json":
+                f"{base_url}/api",
+
+            "shorten":
+                f"{base_url}/shorten?url=https://example.com",
+
+            "resolve":
+                f"{base_url}/resolve?code=XXXXXX",
+
+            "redirect":
+                f"{base_url}/XXXXXX",
+
+            "logo":
+                f"{base_url}/logo.png",
+
+            "developer":
+                f"{base_url}/developer",
+
+            "developer_json":
+                f"{base_url}/developer/json",
+
+            "commands":
+                f"{base_url}/developer/commands"
+
+        },
+
+        "features": [
+
+            "PostgreSQL storage",
+            "Permanent short links",
+            "URL shortening",
+            "URL resolving",
+            "Click counting",
+            "Open Graph previews",
+            "Discord previews",
+            "Messenger previews",
+            "Facebook previews",
+            "WhatsApp previews",
+            "Telegram previews",
+            "X previews",
+            "LinkedIn previews",
+            "Slack previews",
+            "Maintenance mode",
+            "Developer command panel"
+
+        ]
+
+    })
 
 
 # =========================================================
@@ -989,12 +1249,11 @@ def logo():
 @app.route("/shorten")
 def shorten():
 
-    if get_maintenance():
+    if maintenance_enabled():
 
         return jsonify({
             "success": False,
-            "error": "API is currently in maintenance mode",
-            "status": "maintenance"
+            "error": "API is currently in maintenance mode."
         }), 503
 
     ip = request.remote_addr or "unknown"
@@ -1003,7 +1262,8 @@ def shorten():
 
         return jsonify({
             "success": False,
-            "error": "Rate limit exceeded. Try again later."
+            "error":
+                "Rate limit exceeded. Try again later."
         }), 429
 
     url = request.args.get(
@@ -1015,21 +1275,24 @@ def shorten():
 
         return jsonify({
             "success": False,
-            "error": "Missing ?url= parameter"
+            "error":
+                "Missing ?url= parameter"
         }), 400
 
     if len(url) > 4096:
 
         return jsonify({
             "success": False,
-            "error": "URL is too long"
+            "error":
+                "URL is too long"
         }), 400
 
     if not valid_url(url):
 
         return jsonify({
             "success": False,
-            "error": "Invalid HTTP/HTTPS URL"
+            "error":
+                "Invalid HTTP/HTTPS URL"
         }), 400
 
     db = get_db()
@@ -1076,18 +1339,32 @@ def shorten():
             db.commit()
 
     finally:
+
         db.close()
 
     base_url = request.host_url.rstrip("/")
 
-    short_url = f"{base_url}/{code}"
+    short_url = (
+        f"{base_url}/{code}"
+    )
 
     return jsonify({
-        "success": True,
-        "code": code,
-        "url": url,
-        "short_url": short_url,
-        "status": api_status()
+
+        "success":
+            True,
+
+        "code":
+            code,
+
+        "url":
+            url,
+
+        "short_url":
+            short_url,
+
+        "json":
+            f"{base_url}/resolve?code={code}"
+
     })
 
 
@@ -1107,7 +1384,8 @@ def resolve():
 
         return jsonify({
             "success": False,
-            "error": "Missing ?code= parameter"
+            "error":
+                "Missing ?code= parameter"
         }), 400
 
     link = get_link(code)
@@ -1116,16 +1394,49 @@ def resolve():
 
         return jsonify({
             "success": False,
-            "error": "Short code not found"
+            "error":
+                "Short code not found"
         }), 404
 
+    base_url = request.host_url.rstrip("/")
+
+    page_url = (
+        f"{base_url}/resolve?code={code}"
+    )
+
+    logo_url = (
+        f"{base_url}/logo.png"
+    )
+
+    if is_social_crawler():
+
+        return Response(
+            social_preview(
+                "Andrei URL Shortener",
+                f"Resolved destination: {link['url']}",
+                page_url,
+                logo_url
+            ),
+            mimetype="text/html"
+        )
+
     return jsonify({
-        "success": True,
-        "code": link["code"],
-        "url": link["url"],
-        "created_at": link["created_at"],
-        "clicks": link["clicks"],
-        "status": api_status()
+
+        "success":
+            True,
+
+        "code":
+            link["code"],
+
+        "url":
+            link["url"],
+
+        "created_at":
+            link["created_at"],
+
+        "clicks":
+            link["clicks"]
+
     })
 
 
@@ -1146,40 +1457,27 @@ def developer():
             ""
         )
 
-        if DEV_PASSWORD and password == DEV_PASSWORD:
+        if (
+            DEV_PASSWORD
+            and password == DEV_PASSWORD
+        ):
 
-            session.clear()
-
-            session["developer_authenticated"] = True
+            session[
+                "developer_authenticated"
+            ] = True
 
             return redirect(
                 "/developer/panel"
             )
 
-        return developer_login_page(
-            "Incorrect password."
-        )
+        error = "Incorrect password."
 
-    return developer_login_page()
+    else:
 
-
-def developer_login_page(error=None):
-
-    base_url = request.host_url.rstrip("/")
-
-    logo_url = f"{base_url}/logo.png"
-
-    error_html = ""
-
-    if error:
-
-        error_html = f"""
-        <p style="color:#ff6b6b;">
-            {html.escape(error)}
-        </p>
-        """
+        error = ""
 
     return f"""<!DOCTYPE html>
+
 <html>
 
 <head>
@@ -1215,7 +1513,7 @@ body {{
 }}
 
 .card {{
-    width: min(390px, 90%);
+    width: min(400px, 90%);
 
     padding: 30px;
 
@@ -1253,8 +1551,6 @@ input {{
     background: #080b11;
 
     color: white;
-
-    outline: none;
 }}
 
 button {{
@@ -1275,6 +1571,10 @@ button {{
     font-weight: bold;
 }}
 
+.error {{
+    color: #ff6b6b;
+}}
+
 </style>
 
 </head>
@@ -1285,7 +1585,7 @@ button {{
 
 <img
     class="logo"
-    src="{logo_url}"
+    src="/logo.png"
     alt="Andrei URL Shortener"
 >
 
@@ -1297,7 +1597,9 @@ Developer Access
 Enter the developer password.
 </p>
 
-{error_html}
+<p class="error">
+{html.escape(error)}
+</p>
 
 <form method="POST">
 
@@ -1305,7 +1607,7 @@ Enter the developer password.
     type="password"
     name="password"
     placeholder="Developer password"
-    autocomplete="current-password"
+    autocomplete="off"
     required
 >
 
@@ -1328,26 +1630,17 @@ Continue
 # =========================================================
 
 @app.route("/developer/panel")
-@developer_required
 def developer_panel():
 
-    base_url = request.host_url.rstrip("/")
+    auth_error = require_developer()
 
-    logo_url = f"{base_url}/logo.png"
+    if auth_error:
+        return redirect("/developer")
 
-    status = api_status()
-
-    if status == "maintenance":
-
-        status_text = "MAINTENANCE"
-        status_class = "maintenance"
-
-    else:
-
-        status_text = "ONLINE"
-        status_class = "online"
+    status = get_status()
 
     return f"""<!DOCTYPE html>
+
 <html>
 
 <head>
@@ -1368,8 +1661,6 @@ def developer_panel():
 body {{
     margin: 0;
 
-    min-height: 100vh;
-
     padding: 20px;
 
     background: #080a10;
@@ -1380,15 +1671,15 @@ body {{
 }}
 
 .container {{
-    width: min(650px, 100%);
+    width: min(700px, 100%);
 
-    margin: auto;
+    margin: 30px auto;
 }}
 
 .card {{
-    margin-bottom: 18px;
-
     padding: 24px;
+
+    margin-bottom: 18px;
 
     background: #11141d;
 
@@ -1397,39 +1688,13 @@ body {{
     border-radius: 20px;
 }}
 
-.header {{
-    text-align: center;
-}}
-
 .logo {{
-    width: 100px;
-    height: 100px;
+    width: 90px;
+    height: 90px;
 
     object-fit: cover;
 
-    border-radius: 22px;
-}}
-
-.status {{
-    display: inline-block;
-
-    margin-top: 12px;
-
-    padding: 8px 14px;
-
     border-radius: 20px;
-
-    font-weight: bold;
-}}
-
-.online {{
-    background: #18251d;
-    color: #63d889;
-}}
-
-.maintenance {{
-    background: #302318;
-    color: #ffb454;
 }}
 
 button {{
@@ -1443,35 +1708,45 @@ button {{
 
     border-radius: 10px;
 
+    background: #7c6cff;
+
     color: white;
 
     font-weight: bold;
-
-    background: #7c6cff;
 }}
 
 .danger {{
-    background: #8b3d3d;
+    background: #9b3d3d;
+}}
+
+input {{
+    width: 100%;
+
+    padding: 12px;
+
+    margin-top: 8px;
+
+    border-radius: 10px;
+
+    border: 1px solid #303747;
+
+    background: #080b11;
+
+    color: white;
+}}
+
+.status {{
+    display: inline-block;
+
+    padding: 8px 14px;
+
+    border-radius: 20px;
+
+    background: #252b3b;
 }}
 
 a {{
     color: #aaa2ff;
-
-    text-decoration: none;
-}}
-
-.code {{
-    padding: 12px;
-
-    margin-top: 10px;
-
-    border-radius: 10px;
-
-    background: #080b11;
-
-    font-family: monospace;
-
-    word-break: break-word;
 }}
 
 </style>
@@ -1482,24 +1757,24 @@ a {{
 
 <div class="container">
 
-<div class="card header">
+<div class="card">
 
 <img
     class="logo"
-    src="{logo_url}"
+    src="/logo.png"
     alt="Andrei URL Shortener"
 >
 
 <h1>
-Developer Panel
+Developer Command Panel
 </h1>
 
 <p>
-Andrei URL Shortener API
+Current API status:
 </p>
 
-<div class="status {status_class}">
-    {status_text}
+<div class="status">
+    {html.escape(status)}
 </div>
 
 </div>
@@ -1508,44 +1783,39 @@ Andrei URL Shortener API
 <div class="card">
 
 <h2>
-Maintenance
+Maintenance Mode
 </h2>
 
-<p>
-Current status:
-<strong>{status}</strong>
-</p>
-
 <form
+    action="/developer/command"
     method="POST"
-    action="/developer/commands/maintenance"
 >
 
 <input
     type="hidden"
-    name="action"
-    value="enable"
+    name="command"
+    value="maintenance_on"
 >
 
-<button class="danger">
+<button type="submit">
 Enable Maintenance
 </button>
 
 </form>
 
 <form
+    action="/developer/command"
     method="POST"
-    action="/developer/commands/maintenance"
 >
 
 <input
     type="hidden"
-    name="action"
-    value="disable"
+    name="command"
+    value="maintenance_off"
 >
 
-<button>
-Disable Maintenance
+<button type="submit">
+Set Online
 </button>
 
 </form>
@@ -1556,15 +1826,27 @@ Disable Maintenance
 <div class="card">
 
 <h2>
-Developer API
+Other Commands
 </h2>
 
-<div class="code">
-GET {base_url}/developer/json
-</div>
+<p>
+View the complete command list:
+</p>
+
+<a href="/developer/commands">
+/developer/commands
+</a>
+
+<br><br>
 
 <a href="/developer/json">
-Open Developer JSON
+Developer JSON
+</a>
+
+<br><br>
+
+<a href="/api">
+Public JSON
 </a>
 
 </div>
@@ -1572,34 +1854,13 @@ Open Developer JSON
 
 <div class="card">
 
-<h2>
-Commands
-</h2>
-
-<div class="code">
-maintenance.enable
-</div>
-
-<div class="code">
-maintenance.disable
-</div>
-
-<div class="code">
-status
-</div>
-
-</div>
-
-
-<div class="card">
-
 <form
-    method="POST"
     action="/developer/logout"
+    method="POST"
 >
 
-<button>
-Logout
+<button class="danger">
+Log Out
 </button>
 
 </form>
@@ -1615,16 +1876,146 @@ Logout
 
 
 # =========================================================
+# COMMAND EXECUTION
+# =========================================================
+
+@app.route(
+    "/developer/command",
+    methods=["POST"]
+)
+def developer_command():
+
+    auth_error = require_developer()
+
+    if auth_error:
+        return redirect("/developer")
+
+    command = request.form.get(
+        "command",
+        ""
+    ).strip().lower()
+
+    if command == "maintenance_on":
+
+        set_setting(
+            "status",
+            "maintenance"
+        )
+
+        return redirect(
+            "/developer/panel"
+        )
+
+    if command == "maintenance_off":
+
+        set_setting(
+            "status",
+            "online"
+        )
+
+        return redirect(
+            "/developer/panel"
+        )
+
+    return jsonify({
+
+        "success":
+            False,
+
+        "error":
+            "Unknown command"
+
+    }), 400
+
+
+# =========================================================
+# COMMAND JSON
+# =========================================================
+
+@app.route("/developer/commands")
+def developer_commands():
+
+    auth_error = require_developer()
+
+    if auth_error:
+        return jsonify({
+            "success": False,
+            "error": "Developer authentication required"
+        }), 401
+
+    base_url = request.host_url.rstrip("/")
+
+    return jsonify({
+
+        "name":
+            "Andrei URL Shortener Command API",
+
+        "status":
+            get_status(),
+
+        "commands": {
+
+            "maintenance_on": {
+                "method":
+                    "POST",
+
+                "path":
+                    "/developer/command",
+
+                "description":
+                    "Put the API into maintenance mode",
+
+                "form":
+                    {
+                        "command":
+                            "maintenance_on"
+                    }
+            },
+
+            "maintenance_off": {
+                "method":
+                    "POST",
+
+                "path":
+                    "/developer/command",
+
+                "description":
+                    "Set the API back to online",
+
+                "form":
+                    {
+                        "command":
+                            "maintenance_off"
+                    }
+            }
+
+        },
+
+        "developer_panel":
+            f"{base_url}/developer/panel",
+
+        "developer_json":
+            f"{base_url}/developer/json"
+
+    })
+
+
+# =========================================================
 # DEVELOPER JSON
 # =========================================================
 
 @app.route("/developer/json")
-@developer_required
 def developer_json():
 
-    base_url = request.host_url.rstrip("/")
+    auth_error = require_developer()
 
-    status = api_status()
+    if auth_error:
+        return jsonify({
+            "success": False,
+            "error": "Developer authentication required"
+        }), 401
+
+    base_url = request.host_url.rstrip("/")
 
     return jsonify({
 
@@ -1635,189 +2026,82 @@ def developer_json():
             "5.0",
 
         "status":
-            status,
-
-        "maintenance":
-            status == "maintenance",
+            get_status(),
 
         "database": {
+
             "type":
                 "PostgreSQL",
 
             "persistent":
                 True
+
         },
 
-        "commands": {
+        "authentication": {
 
-            "maintenance.enable": {
-                "method":
-                    "POST",
+            "developer_password":
+                "Environment Variable",
 
-                "path":
-                    "/developer/commands/maintenance",
-
-                "action":
-                    "enable",
-
-                "description":
-                    "Enable API maintenance mode"
-            },
-
-            "maintenance.disable": {
-                "method":
-                    "POST",
-
-                "path":
-                    "/developer/commands/maintenance",
-
-                "action":
-                    "disable",
-
-                "description":
-                    "Disable API maintenance mode"
-            },
-
-            "status": {
-                "method":
-                    "GET",
-
-                "path":
-                    "/developer/json",
-
-                "description":
-                    "View current API status"
-            }
+            "session":
+                True
 
         },
 
         "endpoints": {
 
-            "homepage": {
-                "method":
-                    "GET",
+            "homepage":
+                f"{base_url}/",
 
-                "path":
-                    "/",
+            "api_json":
+                f"{base_url}/api",
 
-                "example":
-                    f"{base_url}/"
-            },
+            "shorten":
+                f"{base_url}/shorten?url=https://example.com",
 
-            "shorten": {
-                "method":
-                    "GET",
+            "resolve":
+                f"{base_url}/resolve?code=XXXXXX",
 
-                "path":
-                    "/shorten?url=https://example.com",
+            "redirect":
+                f"{base_url}/XXXXXX",
 
-                "example":
-                    f"{base_url}/shorten?url=https://example.com"
-            },
+            "logo":
+                f"{base_url}/logo.png",
 
-            "resolve": {
-                "method":
-                    "GET",
+            "developer":
+                f"{base_url}/developer",
 
-                "path":
-                    "/resolve?code=XXXXXX",
+            "developer_panel":
+                f"{base_url}/developer/panel",
 
-                "example":
-                    f"{base_url}/resolve?code=XXXXXX"
-            },
+            "developer_json":
+                f"{base_url}/developer/json",
 
-            "redirect": {
-                "method":
-                    "GET",
-
-                "path":
-                    "/XXXXXX",
-
-                "example":
-                    f"{base_url}/XXXXXX"
-            },
-
-            "logo": {
-                "method":
-                    "GET",
-
-                "path":
-                    "/logo.png",
-
-                "example":
-                    f"{base_url}/logo.png"
-            },
-
-            "developer": {
-                "method":
-                    "GET / POST",
-
-                "path":
-                    "/developer",
-
-                "authentication":
-                    "password"
-            },
-
-            "developer_panel": {
-                "method":
-                    "GET",
-
-                "path":
-                    "/developer/panel",
-
-                "authentication":
-                    "required"
-            },
-
-            "developer_json": {
-                "method":
-                    "GET",
-
-                "path":
-                    "/developer/json",
-
-                "authentication":
-                    "required"
-            }
+            "commands":
+                f"{base_url}/developer/commands"
 
         },
 
         "features": [
 
             "PostgreSQL storage",
-
             "Permanent short links",
-
             "URL shortening",
-
             "URL resolving",
-
             "Click counting",
-
             "Open Graph previews",
-
             "Discord previews",
-
             "Messenger previews",
-
             "Facebook previews",
-
             "WhatsApp previews",
-
             "Telegram previews",
-
-            "X/Twitter previews",
-
+            "X previews",
             "LinkedIn previews",
-
             "Slack previews",
-
-            "Developer authentication",
-
             "Maintenance mode",
-
-            "Persistent API status"
+            "Developer command panel",
+            "Developer authentication",
+            "Environment variable password"
 
         ]
 
@@ -1825,62 +2109,13 @@ def developer_json():
 
 
 # =========================================================
-# DEVELOPER COMMANDS
-# =========================================================
-
-@app.route(
-    "/developer/commands/maintenance",
-    methods=["POST"]
-)
-@developer_required
-def maintenance_command():
-
-    action = request.form.get(
-        "action",
-        ""
-    ).lower()
-
-    if action == "enable":
-
-        set_maintenance(True)
-
-        return redirect(
-            "/developer/panel"
-        )
-
-    if action == "disable":
-
-        set_maintenance(False)
-
-        return redirect(
-            "/developer/panel"
-        )
-
-    return jsonify({
-
-        "success": False,
-
-        "error":
-            "Invalid maintenance action",
-
-        "allowed":
-            [
-                "enable",
-                "disable"
-            ]
-
-    }), 400
-
-
-# =========================================================
-# DEVELOPER LOGOUT
+# LOGOUT
 # =========================================================
 
 @app.route(
     "/developer/logout",
     methods=["POST"]
 )
-@developer_required
 def developer_logout():
 
     session.clear()
@@ -1896,11 +2131,14 @@ def developer_logout():
 def follow(code):
 
     reserved = {
+
         "shorten",
         "resolve",
         "favicon.ico",
         "logo.png",
-        "developer"
+        "developer",
+        "api"
+
     }
 
     if code in reserved:
@@ -1921,11 +2159,15 @@ def follow(code):
 
     base_url = request.host_url.rstrip("/")
 
-    page_url = f"{base_url}/{code}"
+    page_url = (
+        f"{base_url}/{code}"
+    )
 
-    logo_url = f"{base_url}/logo.png"
+    logo_url = (
+        f"{base_url}/logo.png"
+    )
 
-    # Social crawlers get metadata.
+    # Social-media crawlers receive preview metadata.
     if is_social_crawler():
 
         return Response(
@@ -1939,7 +2181,7 @@ def follow(code):
             mimetype="text/html"
         )
 
-    # Normal visitors redirect immediately.
+    # Normal visitors redirect normally.
     increment_click(code)
 
     return redirect(
@@ -1956,8 +2198,16 @@ def follow(code):
 def not_found(error):
 
     return jsonify({
-        "success": False,
-        "error": "Endpoint not found"
+
+        "success":
+            False,
+
+        "error":
+            "Endpoint not found",
+
+        "status":
+            get_status()
+
     }), 404
 
 
@@ -1965,8 +2215,13 @@ def not_found(error):
 def server_error(error):
 
     return jsonify({
-        "success": False,
-        "error": "Internal server error"
+
+        "success":
+            False,
+
+        "error":
+            "Internal server error"
+
     }), 500
 
 
