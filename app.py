@@ -18,7 +18,6 @@ import string
 import time
 import os
 import html
-import re
 
 
 # =========================================================
@@ -28,12 +27,18 @@ import re
 app = Flask(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
+
 DEV_PASSWORD = os.environ.get("DEV_PASSWORD")
+
 FLASK_SECRET_KEY = os.environ.get("FLASK_SECRET_KEY")
 
+# Do not crash Render just because the secret is missing.
+# Set FLASK_SECRET_KEY in Render for persistent sessions.
 if not FLASK_SECRET_KEY:
-    raise RuntimeError(
-        "FLASK_SECRET_KEY environment variable is not configured"
+    FLASK_SECRET_KEY = secrets.token_hex(32)
+    print(
+        "WARNING: FLASK_SECRET_KEY is not configured. "
+        "A temporary secret was generated."
     )
 
 app.secret_key = FLASK_SECRET_KEY
@@ -52,29 +57,34 @@ CODE_LENGTH = 6
 
 ALPHABET = string.ascii_letters + string.digits
 
+DB_READY = False
+
 
 # =========================================================
-# DATABASE
+# DATABASE CONNECTION
 # =========================================================
 
 def get_db():
 
     if not DATABASE_URL:
         raise RuntimeError(
-            "DATABASE_URL is not configured"
+            "DATABASE_URL environment variable is not configured."
         )
 
     return psycopg2.connect(
         DATABASE_URL,
-        sslmode="require"
+        sslmode="require",
+        connect_timeout=10
     )
 
 
 # =========================================================
-# DATABASE INITIALIZATION
+# DATABASE INITIALIZATION / MIGRATION
 # =========================================================
 
 def init_db():
+
+    global DB_READY
 
     db = get_db()
 
@@ -82,9 +92,9 @@ def init_db():
 
         with db.cursor() as cur:
 
-            # -------------------------------------------------
-            # LINKS TABLE
-            # -------------------------------------------------
+            # =================================================
+            # LINKS
+            # =================================================
 
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS links (
@@ -96,48 +106,59 @@ def init_db():
                 )
             """)
 
-            # -------------------------------------------------
-            # SETTINGS TABLE
+            # =================================================
+            # API SETTINGS
             #
-            # This is intentionally compatible with the
-            # existing api_settings table from older versions.
-            # -------------------------------------------------
+            # IMPORTANT:
+            # This supports your OLD api_settings table.
+            #
+            # CREATE TABLE IF NOT EXISTS does NOT modify an
+            # existing table, so we explicitly add missing
+            # columns.
+            # =================================================
 
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS api_settings (
                     id BIGSERIAL PRIMARY KEY,
-                    setting TEXT UNIQUE NOT NULL,
+                    setting TEXT,
                     value TEXT
                 )
             """)
 
-            # -------------------------------------------------
-            # IMPORTANT FIX
-            #
-            # Your existing api_settings table has an "id"
-            # column which is NOT NULL but apparently doesn't
-            # have a working automatic sequence.
-            #
-            # Create a sequence and attach it as the default.
-            # -------------------------------------------------
+            # Add missing columns to old tables.
 
             cur.execute("""
-                CREATE SEQUENCE IF NOT EXISTS api_settings_id_seq
+                ALTER TABLE api_settings
+                ADD COLUMN IF NOT EXISTS setting TEXT
             """)
 
-            # Find the current largest valid ID.
+            cur.execute("""
+                ALTER TABLE api_settings
+                ADD COLUMN IF NOT EXISTS value TEXT
+            """)
+
+            # =================================================
+            # ID FIX
+            #
+            # Some old versions had an id column that was NOT
+            # automatically generated.
+            # =================================================
+
+            cur.execute("""
+                CREATE SEQUENCE IF NOT EXISTS
+                api_settings_id_seq
+            """)
+
             cur.execute("""
                 SELECT COALESCE(MAX(id), 0)
                 FROM api_settings
             """)
 
-            max_id = cur.fetchone()[0]
+            row = cur.fetchone()
 
-            if max_id is None:
-                max_id = 0
+            max_id = int(row[0] or 0)
 
-            # Make the sequence start after the largest ID.
-            if int(max_id) > 0:
+            if max_id > 0:
 
                 cur.execute(
                     """
@@ -147,7 +168,7 @@ def init_db():
                         true
                     )
                     """,
-                    (int(max_id),)
+                    (max_id,)
                 )
 
             else:
@@ -162,48 +183,101 @@ def init_db():
                     """
                 )
 
-            # Attach the sequence to id.
             cur.execute("""
                 ALTER TABLE api_settings
                 ALTER COLUMN id
-                SET DEFAULT nextval('api_settings_id_seq')
+                SET DEFAULT nextval(
+                    'api_settings_id_seq'
+                )
             """)
 
-            # -------------------------------------------------
-            # Make sure important settings exist.
-            # -------------------------------------------------
+            # =================================================
+            # REMOVE NULL SETTING VALUES
+            #
+            # Old rows with NULL settings can safely remain,
+            # but we don't want them interfering with our
+            # application.
+            # =================================================
+
+            # =================================================
+            # CREATE IMPORTANT SETTINGS
+            #
+            # We intentionally DON'T use ON CONFLICT here
+            # because your old database may not have a UNIQUE
+            # constraint on "setting".
+            # =================================================
 
             cur.execute("""
-                INSERT INTO api_settings
-                    (setting, value)
-                VALUES
-                    ('status', 'online')
-                ON CONFLICT (setting)
-                DO NOTHING
-            """)
+                SELECT id
+                FROM api_settings
+                WHERE setting = %s
+                LIMIT 1
+            """, ("status",))
 
-            cur.execute("""
-                INSERT INTO api_settings
-                    (setting, value)
-                VALUES
+            if not cur.fetchone():
+
+                cur.execute(
+                    """
+                    INSERT INTO api_settings
+                        (setting, value)
+                    VALUES
+                        (%s, %s)
+                    """,
                     (
-                        'maintenance_message',
-                        'The API is currently under maintenance.'
+                        "status",
+                        "online"
                     )
-                ON CONFLICT (setting)
-                DO NOTHING
-            """)
+                )
 
             cur.execute("""
-                INSERT INTO api_settings
-                    (setting, value)
-                VALUES
-                    ('version', '5.0')
-                ON CONFLICT (setting)
-                DO NOTHING
-            """)
+                SELECT id
+                FROM api_settings
+                WHERE setting = %s
+                LIMIT 1
+            """, ("maintenance_message",))
+
+            if not cur.fetchone():
+
+                cur.execute(
+                    """
+                    INSERT INTO api_settings
+                        (setting, value)
+                    VALUES
+                        (%s, %s)
+                    """,
+                    (
+                        "maintenance_message",
+                        "The API is currently under maintenance."
+                    )
+                )
+
+            cur.execute("""
+                SELECT id
+                FROM api_settings
+                WHERE setting = %s
+                LIMIT 1
+            """, ("version",))
+
+            if not cur.fetchone():
+
+                cur.execute(
+                    """
+                    INSERT INTO api_settings
+                        (setting, value)
+                    VALUES
+                        (%s, %s)
+                    """,
+                    (
+                        "version",
+                        "6.0"
+                    )
+                )
 
         db.commit()
+
+        DB_READY = True
+
+        print("Database initialized successfully.")
 
     finally:
 
@@ -211,10 +285,26 @@ def init_db():
 
 
 # =========================================================
+# DATABASE READY CHECK
+# =========================================================
+
+def ensure_database():
+
+    global DB_READY
+
+    if DB_READY:
+        return
+
+    init_db()
+
+
+# =========================================================
 # SETTINGS
 # =========================================================
 
 def get_setting(name, default=None):
+
+    ensure_database()
 
     db = get_db()
 
@@ -227,6 +317,7 @@ def get_setting(name, default=None):
                 SELECT value
                 FROM api_settings
                 WHERE setting = %s
+                ORDER BY id ASC
                 LIMIT 1
                 """,
                 (name,)
@@ -246,24 +337,44 @@ def get_setting(name, default=None):
 
 def set_setting(name, value):
 
+    ensure_database()
+
     db = get_db()
 
     try:
 
         with db.cursor() as cur:
 
+            # Update an existing setting first.
+
             cur.execute(
                 """
-                INSERT INTO api_settings
-                    (setting, value)
-                VALUES
-                    (%s, %s)
-                ON CONFLICT (setting)
-                DO UPDATE SET
-                    value = EXCLUDED.value
+                UPDATE api_settings
+                SET value = %s
+                WHERE setting = %s
                 """,
-                (name, str(value))
+                (
+                    str(value),
+                    name
+                )
             )
+
+            # If nothing existed, insert it.
+
+            if cur.rowcount == 0:
+
+                cur.execute(
+                    """
+                    INSERT INTO api_settings
+                        (setting, value)
+                    VALUES
+                        (%s, %s)
+                    """,
+                    (
+                        name,
+                        str(value)
+                    )
+                )
 
         db.commit()
 
@@ -299,7 +410,7 @@ def maintenance_message():
 
 
 # =========================================================
-# URL HELPERS
+# URL VALIDATION
 # =========================================================
 
 def valid_url(url):
@@ -338,7 +449,6 @@ def rate_limited(ip):
     ]
 
     if len(requests_log[ip]) >= RATE_LIMIT:
-
         return True
 
     requests_log[ip].append(now)
@@ -347,10 +457,12 @@ def rate_limited(ip):
 
 
 # =========================================================
-# CODE GENERATOR
+# GENERATE SHORT CODE
 # =========================================================
 
 def generate_code():
+
+    ensure_database()
 
     while True:
 
@@ -370,12 +482,12 @@ def generate_code():
                     SELECT 1
                     FROM links
                     WHERE code = %s
+                    LIMIT 1
                     """,
                     (code,)
                 )
 
                 if not cur.fetchone():
-
                     return code
 
         finally:
@@ -388,6 +500,8 @@ def generate_code():
 # =========================================================
 
 def get_link(code):
+
+    ensure_database()
 
     db = get_db()
 
@@ -406,6 +520,7 @@ def get_link(code):
                     clicks
                 FROM links
                 WHERE code = %s
+                LIMIT 1
                 """,
                 (code,)
             )
@@ -418,10 +533,12 @@ def get_link(code):
 
 
 # =========================================================
-# INCREMENT CLICKS
+# CLICK COUNTER
 # =========================================================
 
 def increment_click(code):
+
+    ensure_database()
 
     db = get_db()
 
@@ -446,7 +563,7 @@ def increment_click(code):
 
 
 # =========================================================
-# SOCIAL CRAWLERS
+# SOCIAL MEDIA CRAWLER DETECTION
 # =========================================================
 
 def is_social_crawler():
@@ -516,7 +633,8 @@ def maintenance_page():
     logo_url = f"{base_url}/logo.png"
 
     message = html.escape(
-        maintenance_message()
+        maintenance_message(),
+        quote=True
     )
 
     return f"""
@@ -532,9 +650,7 @@ def maintenance_page():
     content="width=device-width, initial-scale=1"
 >
 
-<title>
-Andrei API - Maintenance
-</title>
+<title>Andrei API - Maintenance</title>
 
 <meta
     name="description"
@@ -559,6 +675,11 @@ Andrei API - Maintenance
 <meta
     property="og:type"
     content="website"
+>
+
+<link
+    rel="icon"
+    href="{logo_url}"
 >
 
 <style>
@@ -590,10 +711,7 @@ body {{
 
     color: white;
 
-    font-family:
-        Arial,
-        Helvetica,
-        sans-serif;
+    font-family: Arial, sans-serif;
 }}
 
 .card {{
@@ -604,7 +722,7 @@ body {{
 
     text-align: center;
 
-    background: rgba(17,20,29,.96);
+    background: #11141d;
 
     border: 1px solid #292f40;
 
@@ -655,8 +773,6 @@ h1 {{
 
 p {{
 
-    margin: 0;
-
     color: #9ca4b8;
 
     line-height: 1.6;
@@ -692,19 +808,19 @@ p {{
 >
 
 <div class="badge">
-    MAINTENANCE
+MAINTENANCE
 </div>
 
 <h1>
-    API Temporarily Offline
+API Temporarily Offline
 </h1>
 
 <p>
-    {message}
+{message}
 </p>
 
 <div class="status">
-    status: maintenance
+status: maintenance
 </div>
 
 </div>
@@ -722,28 +838,45 @@ p {{
 @app.route("/")
 def home():
 
+    try:
+
+        status = get_status()
+
+        message = maintenance_message()
+
+    except Exception as exc:
+
+        print(
+            "Homepage database error:",
+            exc
+        )
+
+        status = "unknown"
+
+        message = "Database connection unavailable."
+
     base_url = request.host_url.rstrip("/")
 
     logo_url = f"{base_url}/logo.png"
 
-    status = get_status()
+    if status == "maintenance":
 
-    message = maintenance_message()
+        status_text = "● Maintenance"
+        status_class = "maintenance"
 
-    status_text = (
-        "● Maintenance"
-        if status == "maintenance"
-        else "● Online"
-    )
+    elif status == "online":
 
-    status_class = (
-        "maintenance"
-        if status == "maintenance"
-        else "online"
-    )
+        status_text = "● Online"
+        status_class = "online"
+
+    else:
+
+        status_text = "● Unknown"
+        status_class = "unknown"
 
     safe_message = html.escape(
-        message
+        message,
+        quote=True
     )
 
     return f"""
@@ -816,10 +949,7 @@ body {{
 
     color: #f5f7ff;
 
-    font-family:
-        Arial,
-        Helvetica,
-        sans-serif;
+    font-family: Arial, sans-serif;
 }}
 
 .container {{
@@ -893,6 +1023,13 @@ h1 {{
     color: #ffd35a;
 }}
 
+.status.unknown {{
+
+    background: #242631;
+
+    color: #aaa;
+}}
+
 .message {{
 
     margin: 15px auto 0;
@@ -918,8 +1055,7 @@ h1 {{
 
     padding: 22px;
 
-    background:
-        rgba(17,20,29,.96);
+    background: rgba(17,20,29,.96);
 
     border: 1px solid #272c3a;
 
@@ -1133,20 +1269,20 @@ API Status
 </h2>
 
 <p>
-Check the current API status as JSON.
+Check the current live API status.
 </p>
 
 <a
     class="button"
     href="/status"
 >
-Open /status
+Open /status JSON
 </a>
 
 </div>
 
 
-<!-- JSON -->
+<!-- PUBLIC JSON -->
 
 <div class="card">
 
@@ -1155,14 +1291,14 @@ API JSON
 </h2>
 
 <p>
-Developer-friendly information about the API.
+Public API information and endpoints.
 </p>
 
 <a
     class="button"
     href="/api"
 >
-Open JSON
+Open /api JSON
 </a>
 
 </div>
@@ -1192,6 +1328,14 @@ GET /XXXXXX
 GET /status
 </div>
 
+<div class="endpoint">
+GET /api
+</div>
+
+<div class="endpoint">
+GET /logo.png
+</div>
+
 </div>
 
 
@@ -1204,7 +1348,7 @@ Developer Panel
 </h2>
 
 <p>
-Manage API status, maintenance mode, messages and settings.
+Manage maintenance mode, messages, status and API settings.
 </p>
 
 <a
@@ -1233,7 +1377,7 @@ Andrei URL Shortener API
 
 
 # =========================================================
-# STATUS ENDPOINT
+# STATUS
 # =========================================================
 
 @app.route("/status")
@@ -1261,7 +1405,7 @@ def status_endpoint():
         "version":
             get_setting(
                 "version",
-                "5.0"
+                "6.0"
             ),
 
         "database":
@@ -1271,7 +1415,7 @@ def status_endpoint():
 
 
 # =========================================================
-# API JSON
+# PUBLIC API JSON
 # =========================================================
 
 @app.route("/api")
@@ -1279,7 +1423,11 @@ def api_json():
 
     base_url = request.host_url.rstrip("/")
 
+    status = get_status()
+
     return jsonify({
+
+        "success": True,
 
         "name":
             "Andrei URL Shortener API",
@@ -1287,11 +1435,17 @@ def api_json():
         "version":
             get_setting(
                 "version",
-                "5.0"
+                "6.0"
             ),
 
         "status":
-            get_status(),
+            status,
+
+        "online":
+            status == "online",
+
+        "maintenance":
+            status == "maintenance",
 
         "message":
             maintenance_message(),
@@ -1333,6 +1487,22 @@ def api_json():
 
         ],
 
+        "commands": [
+
+            "online",
+
+            "maintenance_on",
+
+            "maintenance_off",
+
+            "message",
+
+            "status",
+
+            "stats"
+
+        ],
+
         "endpoints": {
 
             "homepage":
@@ -1358,6 +1528,9 @@ def api_json():
 
             "developer":
                 f"{base_url}/developer",
+
+            "developer_panel":
+                f"{base_url}/developer/panel",
 
             "developer_json":
                 f"{base_url}/developer/json"
@@ -1391,7 +1564,6 @@ def shorten():
 
         }), 503
 
-
     ip = request.remote_addr or "unknown"
 
     if rate_limited(ip):
@@ -1405,12 +1577,10 @@ def shorten():
 
         }), 429
 
-
     url = request.args.get(
         "url",
         ""
     ).strip()
-
 
     if not url:
 
@@ -1423,7 +1593,6 @@ def shorten():
 
         }), 400
 
-
     if len(url) > 4096:
 
         return jsonify({
@@ -1434,7 +1603,6 @@ def shorten():
                 "URL is too long"
 
         }), 400
-
 
     if not valid_url(url):
 
@@ -1447,6 +1615,7 @@ def shorten():
 
         }), 400
 
+    ensure_database()
 
     db = get_db()
 
@@ -1467,7 +1636,6 @@ def shorten():
             )
 
             existing = cur.fetchone()
-
 
             if existing:
 
@@ -1507,11 +1675,9 @@ def shorten():
 
         db.close()
 
-
     base_url = request.host_url.rstrip("/")
 
     short_url = f"{base_url}/{code}"
-
 
     if is_social_crawler():
 
@@ -1527,7 +1693,6 @@ def shorten():
             ),
             mimetype="text/html"
         )
-
 
     return jsonify({
 
@@ -1563,7 +1728,6 @@ def resolve():
         ""
     ).strip()
 
-
     if not code:
 
         return jsonify({
@@ -1575,9 +1739,7 @@ def resolve():
 
         }), 400
 
-
     link = get_link(code)
-
 
     if not link:
 
@@ -1590,7 +1752,6 @@ def resolve():
 
         }), 404
 
-
     base_url = request.host_url.rstrip("/")
 
     page_url = (
@@ -1598,7 +1759,6 @@ def resolve():
     )
 
     logo_url = f"{base_url}/logo.png"
-
 
     if is_social_crawler():
 
@@ -1611,7 +1771,6 @@ def resolve():
             ),
             mimetype="text/html"
         )
-
 
     return jsonify({
 
@@ -1667,11 +1826,9 @@ def social_preview(
         quote=True
     )
 
-
     destination_html = ""
 
     redirect_script = ""
-
 
     if destination:
 
@@ -1681,11 +1838,8 @@ def social_preview(
         )
 
         destination_html = f"""
-
 <div class="destination">
-
 {safe_destination}
-
 </div>
 
 <a
@@ -1694,26 +1848,19 @@ def social_preview(
 >
 Continue
 </a>
-
 """
 
-
+        # Javascript is only for social preview pages.
+        # Normal users are redirected directly by Flask.
         redirect_script = f"""
-
 <script>
-
 setTimeout(function() {{
-
     window.location.replace(
         {destination!r}
     );
-
 }}, 700);
-
 </script>
-
 """
-
 
     return f"""
 <!DOCTYPE html>
@@ -1733,14 +1880,10 @@ setTimeout(function() {{
 {safe_title}
 </title>
 
-
 <meta
     name="description"
     content="{safe_description}"
 >
-
-
-<!-- OPEN GRAPH -->
 
 <meta
     property="og:type"
@@ -1782,9 +1925,6 @@ setTimeout(function() {{
     content="Andrei URL Shortener"
 >
 
-
-<!-- TWITTER -->
-
 <meta
     name="twitter:card"
     content="summary"
@@ -1805,14 +1945,16 @@ setTimeout(function() {{
     content="{safe_image_url}"
 >
 
-
 <link
     rel="icon"
     href="{safe_image_url}"
 >
 
-
 <style>
+
+* {{
+    box-sizing: border-box;
+}}
 
 body {{
 
@@ -1833,7 +1975,6 @@ body {{
     color: white;
 
     font-family: Arial, sans-serif;
-
 }}
 
 .card {{
@@ -1852,7 +1993,6 @@ body {{
 
     box-shadow:
         0 20px 70px rgba(0,0,0,.5);
-
 }}
 
 .logo {{
@@ -1864,13 +2004,11 @@ body {{
     object-fit: cover;
 
     border-radius: 28px;
-
 }}
 
 h1 {{
 
     margin-top: 20px;
-
 }}
 
 p {{
@@ -1878,7 +2016,6 @@ p {{
     color: #9299aa;
 
     line-height: 1.5;
-
 }}
 
 .destination {{
@@ -1896,7 +2033,6 @@ p {{
     word-break: break-word;
 
     font-size: 13px;
-
 }}
 
 .button {{
@@ -1916,7 +2052,6 @@ p {{
     border-radius: 11px;
 
     font-weight: bold;
-
 }}
 
 </style>
@@ -1954,7 +2089,7 @@ p {{
 
 
 # =========================================================
-# SHORT LINK
+# SHORT LINK REDIRECT
 # =========================================================
 
 @app.route("/<code>")
@@ -1972,7 +2107,6 @@ def follow(code):
 
     }
 
-
     if code in reserved:
 
         return jsonify({
@@ -1984,9 +2118,7 @@ def follow(code):
 
         }), 404
 
-
     link = get_link(code)
-
 
     if not link:
 
@@ -1999,19 +2131,15 @@ def follow(code):
 
         }), 404
 
-
     base_url = request.host_url.rstrip("/")
 
-    page_url = (
-        f"{base_url}/{code}"
-    )
+    page_url = f"{base_url}/{code}"
 
     logo_url = f"{base_url}/logo.png"
 
-
-    # -----------------------------------------------------
-    # Maintenance
-    # -----------------------------------------------------
+    # =====================================================
+    # MAINTENANCE
+    # =====================================================
 
     if maintenance_enabled():
 
@@ -2029,10 +2157,9 @@ def follow(code):
 
         return maintenance_page()
 
-
-    # -----------------------------------------------------
-    # Social crawlers
-    # -----------------------------------------------------
+    # =====================================================
+    # SOCIAL CRAWLER
+    # =====================================================
 
     if is_social_crawler():
 
@@ -2047,10 +2174,9 @@ def follow(code):
             mimetype="text/html"
         )
 
-
-    # -----------------------------------------------------
-    # Normal visitors
-    # -----------------------------------------------------
+    # =====================================================
+    # NORMAL USER
+    # =====================================================
 
     increment_click(code)
 
@@ -2081,10 +2207,9 @@ def require_developer():
             "success": False,
 
             "error":
-                "DEV_PASSWORD environment variable is not configured"
+                "DEV_PASSWORD environment variable is not configured."
 
         }), 500
-
 
     if not developer_logged_in():
 
@@ -2093,10 +2218,9 @@ def require_developer():
             "success": False,
 
             "error":
-                "Developer authentication required"
+                "Developer authentication required."
 
         }), 401
-
 
     return None
 
@@ -2118,7 +2242,6 @@ def developer():
             ""
         )
 
-
         if DEV_PASSWORD and secrets.compare_digest(
             password,
             DEV_PASSWORD
@@ -2132,11 +2255,9 @@ def developer():
                 "/developer/panel"
             )
 
-
         return developer_login_page(
             error=True
         )
-
 
     return developer_login_page()
 
@@ -2156,13 +2277,10 @@ def developer_login_page(error=False):
     if error:
 
         error_html = """
-
 <div class="error">
 Incorrect developer password.
 </div>
-
 """
-
 
     return f"""
 <!DOCTYPE html>
@@ -2182,6 +2300,10 @@ Developer Access
 
 <style>
 
+* {{
+    box-sizing: border-box;
+}}
+
 body {{
 
     margin: 0;
@@ -2199,7 +2321,6 @@ body {{
     color: white;
 
     font-family: Arial, sans-serif;
-
 }}
 
 .card {{
@@ -2215,7 +2336,6 @@ body {{
     border: 1px solid #272c3a;
 
     border-radius: 22px;
-
 }}
 
 .logo {{
@@ -2229,7 +2349,6 @@ body {{
     border-radius: 22px;
 
     margin-bottom: 18px;
-
 }}
 
 input {{
@@ -2249,7 +2368,6 @@ input {{
     color: white;
 
     outline: none;
-
 }}
 
 button {{
@@ -2269,7 +2387,6 @@ button {{
     color: white;
 
     font-weight: bold;
-
 }}
 
 .error {{
@@ -2277,7 +2394,6 @@ button {{
     margin-top: 12px;
 
     color: #ff7070;
-
 }}
 
 </style>
@@ -2304,9 +2420,7 @@ Enter the developer password.
 
 {error_html}
 
-<form
-    method="POST"
->
+<form method="POST">
 
 <input
     type="password"
@@ -2340,20 +2454,28 @@ def developer_panel():
     auth = require_developer()
 
     if auth:
-
         return auth
-
 
     status = get_status()
 
-    message = html.escape(
-        maintenance_message()
+    message = maintenance_message()
+
+    safe_message = html.escape(
+        message,
+        quote=True
     )
 
     base_url = request.host_url.rstrip("/")
 
     logo_url = f"{base_url}/logo.png"
 
+    if status == "online":
+
+        status_class = "online"
+
+    else:
+
+        status_class = "maintenance"
 
     return f"""
 <!DOCTYPE html>
@@ -2390,7 +2512,6 @@ body {{
     color: white;
 
     font-family: Arial, sans-serif;
-
 }}
 
 .container {{
@@ -2398,7 +2519,6 @@ body {{
     width: min(850px, 100%);
 
     margin: auto;
-
 }}
 
 .header {{
@@ -2406,7 +2526,6 @@ body {{
     text-align: center;
 
     padding: 20px;
-
 }}
 
 .logo {{
@@ -2418,7 +2537,6 @@ body {{
     object-fit: cover;
 
     border-radius: 22px;
-
 }}
 
 .grid {{
@@ -2429,7 +2547,6 @@ body {{
         repeat(auto-fit, minmax(240px, 1fr));
 
     gap: 15px;
-
 }}
 
 .card {{
@@ -2441,7 +2558,6 @@ body {{
     border: 1px solid #272c3a;
 
     border-radius: 18px;
-
 }}
 
 .status {{
@@ -2449,7 +2565,6 @@ body {{
     font-weight: bold;
 
     margin: 10px 0 18px;
-
 }}
 
 .online {{
@@ -2479,10 +2594,10 @@ button {{
     font-weight: bold;
 
     cursor: pointer;
-
 }}
 
-input {{
+input,
+textarea {{
 
     width: 100%;
 
@@ -2497,33 +2612,36 @@ input {{
     color: white;
 
     outline: none;
-
 }}
 
 textarea {{
 
-    width: 100%;
-
     min-height: 100px;
 
-    padding: 12px;
-
-    border-radius: 10px;
-
-    border: 1px solid #303747;
-
-    background: #080b11;
-
-    color: white;
-
     resize: vertical;
-
 }}
 
 a {{
 
     color: #aaa2ff;
 
+}}
+
+.command {{
+
+    margin-top: 8px;
+
+    padding: 9px;
+
+    border-radius: 8px;
+
+    background: #080b11;
+
+    color: #aaa2ff;
+
+    font-family: monospace;
+
+    font-size: 12px;
 }}
 
 </style>
@@ -2546,7 +2664,7 @@ a {{
 Andrei Developer Panel
 </h1>
 
-<div class="status {status}">
+<div class="status {status_class}">
 Current status: {status.upper()}
 </div>
 
@@ -2556,6 +2674,8 @@ Current status: {status.upper()}
 <div class="grid">
 
 
+<!-- MAINTENANCE -->
+
 <div class="card">
 
 <h2>
@@ -2563,7 +2683,7 @@ Maintenance
 </h2>
 
 <p>
-Change whether the API is online or under maintenance.
+Change the API status.
 </p>
 
 <form
@@ -2603,6 +2723,8 @@ Enable Online
 </div>
 
 
+<!-- MESSAGE -->
+
 <div class="card">
 
 <h2>
@@ -2622,8 +2744,8 @@ Maintenance Message
 
 <textarea
     name="message"
-    placeholder="Maintenance message"
->{message}</textarea>
+    maxlength="1000"
+>{safe_message}</textarea>
 
 <button>
 Update Message
@@ -2634,14 +2756,16 @@ Update Message
 </div>
 
 
+<!-- JSON -->
+
 <div class="card">
 
 <h2>
-Status JSON
+JSON
 </h2>
 
 <p>
-Check the live API status.
+Live API information.
 </p>
 
 <a href="/status">
@@ -2650,29 +2774,20 @@ Check the live API status.
 
 <br><br>
 
-<a href="/developer/json">
-Developer JSON
-</a>
-
-</div>
-
-
-<div class="card">
-
-<h2>
-API JSON
-</h2>
-
-<p>
-Public API information.
-</p>
-
 <a href="/api">
 /api
 </a>
 
+<br><br>
+
+<a href="/developer/json">
+/developer/json
+</a>
+
 </div>
 
+
+<!-- COMMANDS -->
 
 <div class="card">
 
@@ -2680,28 +2795,34 @@ Public API information.
 Commands
 </h2>
 
-<p>
-Available developer commands:
-</p>
+<div class="command">
+online
+</div>
 
-<ul>
+<div class="command">
+maintenance_on
+</div>
 
-<li>online</li>
+<div class="command">
+maintenance_off
+</div>
 
-<li>maintenance_on</li>
+<div class="command">
+message
+</div>
 
-<li>maintenance_off</li>
+<div class="command">
+status
+</div>
 
-<li>message</li>
-
-<li>status</li>
-
-<li>stats</li>
-
-</ul>
+<div class="command">
+stats
+</div>
 
 </div>
 
+
+<!-- LOGOUT -->
 
 <div class="card">
 
@@ -2746,19 +2867,16 @@ def developer_command():
     auth = require_developer()
 
     if auth:
-
         return auth
-
 
     command = request.form.get(
         "command",
         ""
     ).strip().lower()
 
-
-    # -----------------------------------------------------
+    # =====================================================
     # ONLINE
-    # -----------------------------------------------------
+    # =====================================================
 
     if command in (
         "online",
@@ -2774,10 +2892,9 @@ def developer_command():
             "/developer/panel"
         )
 
-
-    # -----------------------------------------------------
+    # =====================================================
     # MAINTENANCE
-    # -----------------------------------------------------
+    # =====================================================
 
     if command == "maintenance_on":
 
@@ -2790,10 +2907,9 @@ def developer_command():
             "/developer/panel"
         )
 
-
-    # -----------------------------------------------------
+    # =====================================================
     # MESSAGE
-    # -----------------------------------------------------
+    # =====================================================
 
     if command == "message":
 
@@ -2802,14 +2918,12 @@ def developer_command():
             ""
         ).strip()
 
-
         if not message:
 
             message = (
                 "The API is currently "
                 "under maintenance."
             )
-
 
         if len(message) > 1000:
 
@@ -2818,10 +2932,9 @@ def developer_command():
                 "success": False,
 
                 "error":
-                    "Maintenance message is too long"
+                    "Maintenance message is too long."
 
             }), 400
-
 
         set_setting(
             "maintenance_message",
@@ -2832,10 +2945,9 @@ def developer_command():
             "/developer/panel"
         )
 
-
-    # -----------------------------------------------------
+    # =====================================================
     # STATUS
-    # -----------------------------------------------------
+    # =====================================================
 
     if command == "status":
 
@@ -2846,17 +2958,24 @@ def developer_command():
             "status":
                 get_status(),
 
+            "online":
+                get_status() == "online",
+
+            "maintenance":
+                get_status() == "maintenance",
+
             "message":
                 maintenance_message()
 
         })
 
-
-    # -----------------------------------------------------
+    # =====================================================
     # STATS
-    # -----------------------------------------------------
+    # =====================================================
 
     if command == "stats":
+
+        ensure_database()
 
         db = get_db()
 
@@ -2884,7 +3003,6 @@ def developer_command():
 
             db.close()
 
-
         return jsonify({
 
             "success": True,
@@ -2900,10 +3018,9 @@ def developer_command():
 
         })
 
-
-    # -----------------------------------------------------
-    # UNKNOWN
-    # -----------------------------------------------------
+    # =====================================================
+    # UNKNOWN COMMAND
+    # =====================================================
 
     return jsonify({
 
@@ -2958,12 +3075,13 @@ def developer_json():
     auth = require_developer()
 
     if auth:
-
         return auth
 
+    ensure_database()
 
     base_url = request.host_url.rstrip("/")
 
+    status = get_status()
 
     db = get_db()
 
@@ -2991,8 +3109,9 @@ def developer_json():
 
         db.close()
 
-
     return jsonify({
+
+        "success": True,
 
         "name":
             "Andrei URL Shortener API",
@@ -3000,17 +3119,17 @@ def developer_json():
         "version":
             get_setting(
                 "version",
-                "5.0"
+                "6.0"
             ),
 
         "status":
-            get_status(),
+            status,
 
         "online":
-            get_status() == "online",
+            status == "online",
 
         "maintenance":
-            get_status() == "maintenance",
+            status == "maintenance",
 
         "maintenance_message":
             maintenance_message(),
@@ -3148,6 +3267,11 @@ def not_found(error):
 @app.errorhandler(500)
 def server_error(error):
 
+    print(
+        "500 error:",
+        error
+    )
+
     return jsonify({
 
         "success": False,
@@ -3162,8 +3286,33 @@ def server_error(error):
 # STARTUP
 # =========================================================
 
-init_db()
+# Try to initialize the database when the process starts.
+# If the database is temporarily unavailable, Render can
+# still start the Flask application and initialization will
+# be attempted again on the first database request.
 
+try:
+
+    init_db()
+
+except Exception as exc:
+
+    DB_READY = False
+
+    print(
+        "WARNING: Database initialization failed:",
+        exc
+    )
+
+    print(
+        "The application will retry database initialization "
+        "when a database endpoint is accessed."
+    )
+
+
+# =========================================================
+# LOCAL DEVELOPMENT
+# =========================================================
 
 if __name__ == "__main__":
 
@@ -3177,4 +3326,4 @@ if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=port
-                )
+    )
